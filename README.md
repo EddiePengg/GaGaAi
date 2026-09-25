@@ -1,62 +1,128 @@
-# gaga ai
+<div align="center">
 
-**Grasp up, Get AI.** 胸前佩戴的单手可操作 AI 入口设备，吉祥物是一只鸭子 🦆
+<img src="docs/assets/icons/gaga-logo.png" width="130" alt="gaga ai — 一只戴挂件的白鹅">
 
-核心价值：**单手一按就能输入，另一只手不用离开正在做的事**（骑行/做饭场景是立身之本）。
+# GaGa AI
 
-硬件：微雪 ESP32-S3 + 1.75" AMOLED 圆屏（466×466，32MB Flash，双麦+AEC，QMI8658 六轴，XP2101 PMU，双按键）。
+**Grasp up, Get AI.** —— 挂在胸前的单手 AI 入口
 
-## 仓库结构
+按住说话，AI 帮你记、帮你查、帮你办。**另一只手，不用离开正在做的事。**
 
+[真机演示](#-真机演示) · [架构](#-架构) · [快速开始](#-快速开始) · [文档](#-文档导航)
+
+![](https://img.shields.io/badge/SoC-ESP32--S3-darkgreen) ![](https://img.shields.io/badge/firmware-ESP--IDF_5.5-blue) ![](https://img.shields.io/badge/app-Android/Kotlin-brightgreen) ![](https://img.shields.io/badge/server-Python_3.12_·_uv-yellow) ![](https://img.shields.io/badge/入口-飞书_·_Hermes_Agent-0052CC)
+
+</div>
+
+---
+
+![gaga 实机](docs/assets/demo/device-photo.jpg)
+
+<p align="center"><sub>实机：微雪 ESP32-S3 · 1.75″ AMOLED 圆屏 · 挂绳佩戴 · 两颗键。圆屏上是吉祥物——一只戴 gaga 挂件的白鹅 🦢</sub></p>
+
+## 🎬 真机演示
+
+<table>
+  <tr>
+    <th width="50%"><a href="docs/assets/demo/demo-conversation.mp4">▶ 对话：按住说话 → 回复逐字上屏</a></th>
+    <th width="50%"><a href="docs/assets/demo/demo-message-ui.mp4">▶ 消息卡：录音 → 列表 → 点开详情</a></th>
+  </tr>
+  <tr>
+    <td><a href="docs/assets/demo/demo-conversation.mp4"><img src="docs/assets/demo/demo-conversation-cover.jpg" alt="对话演示"></a></td>
+    <td><a href="docs/assets/demo/demo-message-ui.mp4"><img src="docs/assets/demo/demo-message-ui-cover.jpg" alt="消息卡演示"></a></td>
+  </tr>
+  <tr>
+    <td><sub>挂绳佩戴，真实使用形态：说一句，AI 的回答实时打到圆屏上</sub></td>
+    <td><sub>一问一答一张卡，离屏随时回看；录音中有红点与计时</sub></td>
+  </tr>
+</table>
+
+> 点击封面跳转 GitHub 视频播放页（含环境音）。
+
+## 🤔 为什么做这个
+
+骑摩托车想记一笔灵感、做饭时想查个事、抱着孩子想发条消息——**手被占着**，
+"掏手机 → 解锁 → 找 App → 打字"这条链路太长了。
+
+gaga 挂在胸前：**按住右下键说话，松手就发**。转写交给云端 ASR，执行交给
+飞书群里的 Hermes Agent，回答回到飞书群的同时打到胸前的圆屏上。全程单手、
+不用看手机。
+
+## ✨ 特性
+
+- 🎙️ **按住说话 → AI 执行**：千问 ASR 流式转写（润色定稿、错字自动纠正）
+- 🗣️ **实时语音对话**：长按右上键直接聊，全双工；豆包 / 星辰双引擎，**设备上一键切换**
+- 🤖 **背后是 Agent**：飞书群里的 Hermes 带工具调用——查天气、控家电、记日记、定时提醒
+- 📟 **消息卡 UI**：一问一答一张卡，未读高亮，圆屏上随时回看
+- 🤳 **单手手势**：摇一摇亮屏、翻转静音，全部为"手被占用"设计
+- 🔌 **哑管道架构**：手机 App 只转发不解析，大脑全在服务端——换手机、换 IM、换模型都不动设备
+
+## 🏗️ 架构
+
+```mermaid
+graph LR
+    GAGA["🦆 ESP32-S3<br/>录音 · 圆屏 · 按键"]
+    APP["📱 Android App<br/>哑管道"]
+    SRV["🧠 Server<br/>信令 · ASR · 会话"]
+    FS["💬 飞书群<br/>Hermes Agent"]
+    RT["🎙️ 实时语音<br/>豆包 / 星辰"]
+
+    GAGA <-- "BLE" --> APP
+    APP <-- "MQTT" --> SRV
+    SRV <--> FS
+    SRV <--> RT
 ```
-gaga-ai/
-├── AGENTS.md   # ⚠️ Agent 必读：工作规范与文档同步铁律
-├── docs/       # 全部文档：架构/协议/数据建模/决策记录/硬件/路线图
-├── app/        # Android 手机端：纯哑管道（前台服务保活 + BLE↔服务器转发）
-├── server/     # 服务端：MQTT Broker + 信令 + ASR(Whisper) + 接入端 channels/（飞书官方 API，可扩微信/Telegram）+ Realtime 会话
-├── esp32-idf/  # 设备固件：ESP-IDF 线（微雪官方 BSP，ADR-020）
-├── website/    # 对外展示站：零依赖纯静态单页（预览：cd website && python3 -m http.server 8787）
-├── scripts/    # 本机辅助脚本（IMU 采集、堆监控、素材转换）
-└── reference/  # 芯片参考资料（微雪原理图、官方示例；大体积快照不入库）
+
+三条铁律：
+
+- **音频帧 = 二进制，信令 = JSON 文本帧**，一个字节都不含糊
+- **App 永远哑管道**：只转发不解析，业务逻辑零容忍
+- **服务端是唯一大脑**：鉴权、ASR、工具分发、日志全在 server/
+
+在家 WiFi 直连；户外 App 代挂 BLE+MQTT，断链即时提示（按键前先预检）。
+
+## 🚀 快速开始
+
+三个组件，各自目录里有完整 README：
+
+```bash
+# 服务端（macOS/Linux）：MQTT 桥 + ASR + 飞书接入
+cd server && cp .env.example .env   # 填飞书/火山/百炼密钥
+uv venv --python 3.12 && uv pip install -e . && .venv/bin/gaga-server
+
+# Android 哑管道 App
+cd app && ./gradlew assembleDebug   # 需 JDK 25 + Gradle 9.x
+
+# 设备固件（PlatformIO + ESP-IDF，微雪官方 BSP）
+cd esp32-idf && pio run -t upload
 ```
 
-## 配置与密钥
+密钥全部走环境变量，`.env` 不入库。
 
-服务端密钥（飞书 / 火山引擎 / Step 等）全部走环境变量：`cp server/.env.example server/.env` 后填入自己的值。`.env` 已被 `.gitignore` 排除，任何密钥不得提交进仓库。依赖与构建产物（`.venv`、`.pio`、`managed_components`、Gradle build 等）同样不入库，重建方式见各子目录 README。
-
-## 架构总览
-
-```
-【户外 BLE 模式】
-ESP32 ←— BLE —→ App(哑管道) ←— MQTT/WebSocket —→ 服务器 ←——→ 火山引擎 / 飞书
-
-【在家 WiFi 模式】（第二阶段）
-ESP32 ←———— WiFi (MQTT常连, WebSocket仅对话期) ————→ 服务器
-```
-
-原则：
-- WebSocket 只在实时对话期间存在，平时断开（省电）
-- MQTT 是平时的心跳信令线（回执"叮"走这里下行），户外由 App 代挂
-- 音频帧 = 二进制，信令 = JSON 文本帧
-- App 只做转发，不理解任何协议；复杂度集中在服务器
-
-## 按键分工（设备端写死，ADR-016 v2 版）
+## 🎛️ 单手交互
 
 | 按键 | 动作 | 功能 |
 |---|---|---|
-| 右上 | 单击 | 亮屏（无操作 10 秒自动息屏） |
-| 右上 | 长按 | 进入 realtime 对话模式（M5） |
-| 右下 | 长按 | 按住说话：滴滴 → 说话 → 松开 → 滴滴 → 发送 |
+| 右上 | 单击 | 亮屏（10s 自动息屏） |
+| 右上 | 长按 | 实时语音对话（再按结束） |
+| 右下 | 长按 | 按住说话：滴滴 → 说 → 松手 → 发送 |
+| 整机 | 摇一摇 | 亮屏 |
 
-录音中屏幕常亮显示红色图标+计时，发送后显示"发送中→✅"。
+设备侧的引擎切换（豆包/星辰）在设置页完成，选择权在小设备。
 
-## 里程碑顺序
+## 📚 文档导航
 
-1. **服务端先行**：Whisper + 飞书 webhook，电脑上直接测，不等硬件
-2. 设备到手：`esptool read_flash 0x0 0x2000000 factory_backup.bin` 备份原厂 32MB 固件 → 点亮屏幕 + 按键/IMU 中断 → 录音 UI 状态机
-3. **App 管道打通** → "按一下说话 → 飞书群收到文字 → Hermes 响应 → 设备叮一声" 全链路闭环（项目核心价值）
-4. 双击实时对话（火山 Realtime API）、AOD 表盘、装饰粒子效果
+| 文档 | 内容 |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | 系统架构与三组件职责 |
+| [docs/protocol.md](docs/protocol.md) | BLE 帧格式 / 信令 / MQTT 主题 |
+| [docs/data-model.md](docs/data-model.md) | 信令 schema 与数据实体 |
+| [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR，只追加不改史） |
+| [docs/hardware.md](docs/hardware.md) | 硬件规格、引脚、实测功耗 |
+| [docs/roadmap.md](docs/roadmap.md) | 里程碑与进度 |
+| [docs/dev-log.md](docs/dev-log.md) | 开发日记（按天） |
 
-## 骑行风噪四层防线
+## 🔩 硬件
 
-凑近嘴边（距离平方律）> 防风棉 > ESP-SR AFE 的 NS 降噪 > 服务端 ASR 鲁棒性兜底。
+微雪 **ESP32-S3-Touch-AMOLED-1.75**：466×466 圆屏 · 32MB Flash · 双麦克风 + AEC ·
+QMI8658 六轴 IMU · XP2101 PMU · 双实体按键。原理图与开发板资料见 `reference/`。
