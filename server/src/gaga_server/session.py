@@ -32,7 +32,7 @@ from .ogg import pack_opus_ogg
 from .pipeline import Pipeline
 
 if TYPE_CHECKING:
-    from .asr.volc_stream import VolcStreamASR, VolcStreamSession
+    from .asr.base import StreamASRFactory, StreamASRSession
     from .realtime.bridge import TalkBridge
 
 log = logging.getLogger("gaga_server.session")
@@ -41,12 +41,12 @@ log = logging.getLogger("gaga_server.session")
 class SessionManager:
     def __init__(self, cfg: Config, pipeline: Pipeline, publish_json,
                  talk: "TalkBridge | None" = None,
-                 stream_asr: "VolcStreamASR | None" = None):
+                 stream_asr: "StreamASRFactory | None" = None):
         self.cfg = cfg
         self.pipeline = pipeline
         self.publish_json = publish_json  # callable(dict)：下行 JSON 信令
         self.talk = talk                  # None = realtime 未启用（未配 key 等）
-        self.stream_asr = stream_asr      # None = 批处理模式（默认 local_whisper）
+        self.stream_asr = stream_asr      # None = 批处理模式（local_whisper）
         self.device = ""
         self.fw = ""
         self._buf: list[bytes] = []
@@ -54,7 +54,7 @@ class SessionManager:
         self._flush_timer: threading.Timer | None = None
         self._lock = threading.Lock()
         # 流式会话状态（全部只在 _lock 下读写）
-        self._stream: "VolcStreamSession | None" = None
+        self._stream: "StreamASRSession | None" = None
         self._stream_failed = False
         self._stream_packets: list[bytes] = []   # 降级本地兜底用
         self._rec_stop_ts = 0.0
@@ -133,16 +133,19 @@ class SessionManager:
                     on_final=self._on_stream_final,
                     on_error=self._on_stream_error,
                     on_definite=self._on_stream_definite)
+            else:
+                stream = None  # 未配流式（registry 选 off / 工厂不可用）→ 批处理
+            if stream is not None:
                 with self._lock:
                     self._stream = stream
                     # rec_start 前已到的帧补进流式会话
                     for pkt in self._buf:
                         stream.add_packet(pkt)
                 stream.start()
-                log.info("录音开始（device=%s，流式 ASR 会话建立中）",
-                         self.device or "未登记")
+                log.info("录音开始（device=%s，流式 ASR %s）",
+                         self.device or "未登记", self.stream_asr.name)
             else:
-                log.info("录音开始（device=%s）", self.device or "未登记")
+                log.info("录音开始（device=%s，批处理）", self.device or "未登记")
         elif sig == "rec_stop":
             flush_now = False
             with self._lock:
@@ -317,14 +320,14 @@ class SessionManager:
 
     # ---- 流式回调（volc-asr 线程触发；带 session 参数区分多段并发收尾）----
 
-    def _on_stream_final(self, stream: "VolcStreamSession", text: str) -> None:
+    def _on_stream_final(self, stream: "StreamASRSession", text: str) -> None:
         latency = (time.monotonic() - stream.rec_stop_ts
                    if stream.rec_stop_ts else -1)
         log.info("流式 ASR 终稿: %r（rec_stop→终稿 %.2fs）", text, latency)
         result = self.pipeline.deliver_text(text, device=self.device)
         self._publish_result(result, getattr(stream, "archive_path", None))
 
-    def _on_stream_definite(self, stream: "VolcStreamSession") -> None:
+    def _on_stream_definite(self, stream: "StreamASRSession") -> None:
         """火山已判停（definite）且本地已 rec_stop：跳过静默窗立即收尾。
 
         definite 意味着火山听到了完整句子结尾—— rec_stop 之后到达的尾巴帧
@@ -339,7 +342,7 @@ class SessionManager:
         log.info("火山 definite 判停，跳过静默窗提前收尾")
         self._flush()
 
-    def _on_stream_error(self, stream: "VolcStreamSession", msg: str) -> None:
+    def _on_stream_error(self, stream: "StreamASRSession", msg: str) -> None:
         with self._lock:
             is_current = stream is self._stream
             if is_current:

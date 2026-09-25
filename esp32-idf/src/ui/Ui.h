@@ -36,6 +36,7 @@ public:
         Shake,         // value = 0 关 / 1 开（摇动录音"摇奶茶"触发，ADR-040）
         Lift,          // value = 0 关 / 1 开（抬手亮屏）
         AutoRotate,    // value = 0 关 / 1 开（自动转向：持握角变化内容跟着转）
+        ScreenFlip,    // value = 0 正 / 1 反（屏幕方向手动固定；自动转向关着时生效）
         TalkProvider,  // value = Settings::TALK_PROVIDERS 下标（对话引擎，ADR-035）
     };
     using SettingCallback = std::function<void(SettingKey, int)>;
@@ -137,6 +138,9 @@ private:
     lv_obj_t* shakeToggle_  = nullptr;   // 摇动录音 开/关胶囊（ADR-040）
     lv_obj_t* liftToggle_   = nullptr;   // 抬手亮屏 开/关胶囊
     lv_obj_t* arotToggle_   = nullptr;   // 自动转向 开/关胶囊
+    lv_obj_t* flipLeft_     = nullptr;   // 屏幕方向 < > 正/反
+    lv_obj_t* flipVal_      = nullptr;
+    lv_obj_t* flipRight_    = nullptr;
     lv_obj_t* aboutCont_    = nullptr;   // 关于展开区（版本/设备/电量/运行时长）
     lv_obj_t* aboutLabel_   = nullptr;   // 关于区文本
     bool      aboutOpen_    = false;

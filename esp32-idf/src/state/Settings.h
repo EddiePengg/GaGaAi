@@ -57,6 +57,10 @@ public:
     // 自动转向（持握角变化内容跟着转 90° 档）：默认开（2026-09-25）
     bool autoRotateEnabled() const { return autoRotateEnabled_; }
     void setAutoRotateEnabled(bool on) { autoRotateEnabled_ = on; }
+    // 屏幕方向手动固定（自动转向关着时生效）：false=正 true=反(180°)。
+    // 即改即存，重启保留（2026-09-25 用户要求）
+    bool screenFlip() const { return screenFlip_; }
+    void setScreenFlip(bool on) { screenFlip_ = on; }
     // 音效已定稿无方案选择（2026-09-25）：嘎=录开/发，叮咚=收，噗噗=错
     // ---- 家模式 WiFi（ADR-039）：启用后重启进 WiFi 直连 MQTT（BLE 栈不启动）----
     bool     wifiEnabled() const { return wifiEnabled_; }
@@ -88,6 +92,7 @@ private:
     bool     shakeEnabled_    = true;
     bool     liftEnabled_     = true;
     bool     autoRotateEnabled_ = true;
+    bool     screenFlip_        = false;
     int      talkProviderIdx_ = 0;  // 默认 volc（豆包）
     char     wifiSsid_[33] = {};
     char     wifiPass_[64] = {};

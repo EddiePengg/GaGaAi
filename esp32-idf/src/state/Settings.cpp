@@ -22,6 +22,7 @@ static constexpr const char* kKeySubs    = "subs";
 static constexpr const char* kKeyShake   = "shake";
 static constexpr const char* kKeyLift    = "lift";
 static constexpr const char* kKeyARot    = "arot";
+static constexpr const char* kKeyFlip    = "scrflip";
 static constexpr const char* kKeySsid    = "wifi_ssid";
 static constexpr const char* kKeyPass    = "wifi_pass";
 static constexpr const char* kKeyWifiOn  = "wifi_on";
@@ -44,6 +45,7 @@ void Settings::load() {
     if (nvs_get_i8(h, kKeyShake, &b) == ESP_OK) shakeEnabled_ = (b != 0);
     if (nvs_get_i8(h, kKeyLift, &b) == ESP_OK) liftEnabled_ = (b != 0);
     if (nvs_get_i8(h, kKeyARot, &b) == ESP_OK) autoRotateEnabled_ = (b != 0);
+    if (nvs_get_i8(h, kKeyFlip, &b) == ESP_OK) screenFlip_ = (b != 0);
     if (nvs_get_i32(h, kKeyTalkPrv, &v) == ESP_OK) setTalkProviderByIndex(static_cast<int>(v));
     nvs_close(h);
     ESP_LOGI(TAG, "设置已载入：音量 %d 亮度 %d 息屏 %lums 提示音 %s 语音唤醒 %s 字幕 %s 对话引擎 %s",
@@ -67,6 +69,7 @@ void Settings::save() {
     nvs_set_i8(h, kKeyShake, shakeEnabled_ ? 1 : 0);
     nvs_set_i8(h, kKeyLift, liftEnabled_ ? 1 : 0);
     nvs_set_i8(h, kKeyARot, autoRotateEnabled_ ? 1 : 0);
+    nvs_set_i8(h, kKeyFlip, screenFlip_ ? 1 : 0);
     nvs_set_i8(h, kKeyWifiOn, wifiEnabled_ ? 1 : 0);
     nvs_set_i32(h, kKeyTalkPrv, talkProviderIdx_);
     const esp_err_t err = nvs_commit(h);

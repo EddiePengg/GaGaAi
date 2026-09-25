@@ -90,14 +90,18 @@ class TalkBridge:
     def __init__(self, cfg: Config,
                  publish_json: Callable[[dict], None],
                  publish_audio: Callable[[bytes], None],
-                 send_command: Callable[[str], str] | None = None):
+                 send_command: Callable[[str], str] | None = None,
+                 registry=None):
         """publish_json/publish_audio：下行信令与音频（→ gaga/down）。
         send_command（ADR-036）：工具指令 → 接入端（飞书群）→ 返回平台 msg_id；
-        None = 接入端未就绪，函数调用回"通道不可用"。"""
+        None = 接入端未就绪，函数调用回"通道不可用"。
+        registry（ADR-043）：provider 登记处——设备没指定引擎时查它的当前值
+        （HTTP 运行时切换 > 环境变量）；None = 直接用环境变量默认。"""
         self.cfg = cfg
         self.publish_json = publish_json
         self.publish_audio = publish_audio
         self._send_command = send_command
+        self._registry = registry
         self._tools = ToolCallTracker()
 
         # asyncio 循环线程：所有 websocket 操作都跑在这里
@@ -210,7 +214,9 @@ class TalkBridge:
         self._session_created.clear()
 
         # provider 选择权在设备（talk_request.provider，用户拍板 ADR-035）；
-        # 信令没带（旧固件）回落服务端默认 REALTIME_PROVIDER
+        # 信令没带（旧固件）→ 查登记处当前值（HTTP 切换 > 环境变量，ADR-043）
+        if not provider_name and self._registry is not None:
+            provider_name = self._registry.current("realtime")
         try:
             provider = create_provider(self.cfg, on_event=self._on_provider_event,
                                        provider_override=provider_name)

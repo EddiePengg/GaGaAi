@@ -1,6 +1,6 @@
 # server — gaga ai 服务端
 
-MQTT 桥 + 帧重组 + Whisper ASR + 接入端 channels/（飞书官方 API 收发，可扩微信/Telegram，ADR-030）+ 豆包实时对话桥（M5）。系统唯一的大脑（AGENTS.md 宪法）。
+MQTT 桥 + 帧重组 + 流式 ASR（千问 message，ADR-042）+ 接入端 channels/（飞书官方 API 收发，可扩微信/Telegram，ADR-030）+ 实时对话桥（豆包/星辰/Gemini 可插拔，M5）。系统唯一的大脑（AGENTS.md 宪法）。
 里程碑 M1 已跑通：`curl 上传录音 → ASR → 飞书群出文字 → MQTT 回执`。
 M5 服务端已跑通：`talk_request → 豆包 Seeduplex 全双工 → 回复语音/文本下行`（ADR-021）。
 
@@ -59,32 +59,42 @@ mosquitto_sub -t gaga/down -v   # 会收到带 3 字节帧头的 {"type":"receip
 `talk_request` → 已配 `VOLCENGINE_API_KEY` 时建立实时会话回 `talk_ready`（见下节）；
 未配置时回 `{"type":"error","code":"NOT_IMPLEMENTED","msg":"实时对话未启用…"}`。
 
-## 流式 ASR（ADR-022，M1 提速）
+## 流式 ASR（消息模式主路；ADR-022/033/042/043）
 
-`ASR_PROVIDER=volc_stream` + `VOLCENGINE_API_KEY` 即启用：录音一开始就把 Opus 帧
-流式转发火山（sauc 双向流式优化版，200ms 聚组增量 Ogg 直发），rec_stop 帧齐即发
-空负包收尾拿终稿；任何环节失败自动降级本地 whisper 批处理（帧缓冲全程保留）。
+`ASR_PROVIDER` 是流式名（`qwen` / `volc_stream`）即启用流式直通：录音一开始就把
+Opus 帧边到边转发识别服务，rec_stop 帧齐即收尾拿定稿；任何环节失败自动降级本地
+whisper 批处理（帧缓冲全程保留）。用哪个由 provider 登记处（ADR-043）统一裁决：
+**设备信令 > `POST /debug/providers` 运行时切换 > 环境变量**。
 
 ```bash
-# 流式链路探针（独立验证 sauc 协议/授权/延迟，不经 MQTT）
+# 千问链路探针：拿录音存档 .ogg 走真实链路（协议/授权/延迟/润色效果）
+.venv/bin/python scripts/asr_qwen_probe.py data/recordings/<某条>.ogg
+# 火山链路探针（sauc 协议，ADR-022 时代的老朋友）
 .venv/bin/python scripts/asr_stream_probe.py
+# 看当前三类能力用哪个 / 运行时切换（不用重启）
+curl localhost:8000/debug/providers
+curl -X POST localhost:8000/debug/providers -H 'Content-Type: application/json' \
+     -d '{"capability":"asr","provider":"qwen"}'
 ```
 
-**2026-09-23 实测**（`resource=volc.bigasr.sauc.duration`，ASR 1.0 小时版）：
+**qwen（当前默认，ADR-042）**：阿里云百炼 `qwen-audio-3.1-asr-flash-message`，
+最终结果是生成式润色定稿（标点/文本归一化/去语气词/上下文纠错）。2026-09-25
+存档回放实测：松手→定稿 0.21~0.56s（finish-task 强制收尾，不等 VAD 静音窗）；
+火山一直识别错的"特带日记"被纠正为"Today 日记"，"4乘4"→"4×4"，自动书名号。
+Key：`DASHSCOPE_API_KEY` env，缺省回落 `~/.bailian/config.json`（bl CLI 登录产物）。
+
+**volc_stream（备选，ADR-022/033）**：火山 sauc 单向流式，裸文本无润色。
+2026-09-23 实测（resource=volc.bigasr.sauc.duration，ASR 1.0 小时版）：
 
 | 场景 | rec_stop→终稿 | 备注 |
 |---|---|---|
-| 本地 whisper small（M1 批处理，对照） | ~3.7s | 2s 静默窗 + ~1.7s CPU 推理 |
+| 本地 whisper small（批处理，对照） | ~3.7s | 2s 静默窗 + ~1.7s CPU 推理 |
 | volc_stream，模拟突发上行 | 1.57s | 帧已齐立即收尾 + 火山 ~1.4s |
 | volc_stream，真实节奏 paced | 2.17s | 走满 2s 静默窗 + 火山 0.17s |
-| volc_stream，真机人声（鸭子麦克风） | 2.15s | BLE 丢包致帧数<声明时长 → 走满窗口；"能听到我说话吧？鸭子。" 识别一字不差 |
+| volc_stream，真机人声（鸭子麦克风） | 2.15s | "能听到我说话吧？鸭子。" 一字不差 |
 
-降级路径实测：把 `VOLC_ASR_RESOURCE_ID` 指向未授权资源（403 `requested resource
-not granted`）→ 日志 "流式 ASR 失败…降级本地 whisper" → 本地 whisper 出字、
-飞书/receipt 正常。录音中途失败则攒帧到收尾再降级。
-
-⚠️ **ASR 2.0 未开通**：`volc.seedasr.sauc.*` 当前 403。要用 Seed-ASR 2.0（准确率更高、
-二遍识别）需在控制台开通"豆包流式语音识别模型2.0"后改 `VOLC_ASR_RESOURCE_ID`。
+⚠️ **ASR 2.0 未开通**：`volc.seedasr.sauc.*` 部分资源 403。要用 Seed-ASR 2.0
+需在控制台开通后改 `VOLC_ASR_RESOURCE_ID`。
 
 **多段连按语义（2026-09-23 修正）**：每段录音是独立任务。新 `rec_start` 到达时上一段
 若还在收尾（静默窗内/流式等终稿），会**立即收尾并照常投递**（日志 "新 rec_start 到达，
@@ -138,10 +148,11 @@ docker compose up -d   # mosquitto + server 两个服务，whisper 模型挂 vol
   解成 16k PCM。HTTP 口上传的任意格式也走 ffmpeg，两链在 PCM 后完全共用。
 - **回执**：全部经 MQTT `gaga/down` 下行，帧化（type=0x02）后 App 原样转发给设备。
   成功 → `receipt`（带接入端 msg_id）；空文本/识别失败 → `error(ASR_FAIL)` 不投递；接入端失败 → `error(CHANNEL_FAIL)`。
-- **ASR 可切换**（ADR-013 / ADR-022）：`ASR_PROVIDER=local_whisper`（本地批处理兜底）/
-  `volcengine`（占位未实现）/ `volc_stream`（**火山流式直通，推荐**——rec_start 即开
-  sauc 会话，帧边到边转发，rec_stop 帧齐即发空负包收尾；失败自动降级 local_whisper）。
-  HTTP 调试口永远走本地 whisper（输入是整段文件）。
+- **ASR 可切换**（ADR-013 / ADR-022 / ADR-042 / ADR-043）：`ASR_PROVIDER=qwen`
+  （**千问 message，默认**——润色定稿）/ `volc_stream`（火山单向流式，裸文本）/
+  `off`（批处理 whisper）/ `local_whisper`（纯批处理模式）。
+  流式链路失败自动降级 local_whisper；运行时切换见 `GET/POST /debug/providers`。
+  HTTP 调试口 /debug/audio 永远走本地 whisper（输入是整段文件，非设备帧流）。
 
 ## 配置（.env，模板见 .env.example）
 
@@ -152,10 +163,13 @@ docker compose up -d   # mosquitto + server 两个服务，whisper 模型挂 vol
 | `FEISHU_CHAT_ID` | 空=自动发现 | 目标群 chat_id（oc_ 开头）；仅当机器人在唯一群里可自动发现 |
 | `FEISHU_REPLY_SENDER` | 空=任意应用消息 | 指定回复者（ou_ 用户 / cli_ 应用；本仓 Hermes=cli_a9f77be0…）；空时只认应用(bot)消息 |
 | `FEISHU_POLL_INTERVAL` | `2.0` | 消息轮询间隔（秒） |
-| `ASR_PROVIDER` | `local_whisper` | ASR 提供方（ADR-013/022）：local_whisper / volcengine / volc_stream |
-| `WHISPER_MODEL` | `small` | 模型档位（tiny/base/small/medium），volc_stream 时作兜底 |
+| `ASR_PROVIDER` | `qwen` | 流式 ASR 提供方（ADR-042/043）：qwen / volc_stream / off；纯批处理 local_whisper / volcengine |
+| `QWEN_ASR_MODEL` | `qwen-audio-3.1-asr-flash-message` | 千问 message 模型（ADR-042） |
+| `DASHSCOPE_API_KEY` | 回落 `~/.bailian/config.json` | 百炼 API Key（bl CLI 登录即有，不进仓库） |
+| `DASHSCOPE_WS_URL` | 从 base_url 推导 | 百炼推理 wss 地址（业务空间专属域名） |
+| `WHISPER_MODEL` | `small` | 模型档位（tiny/base/small/medium），流式失败时的兜底 |
 | `WHISPER_LANGUAGE` | `zh` | 识别语言 |
-| `VOLC_ASR_ENDPOINT` | sauc bigmodel_nostream | 流式 ASR 端点（单向，ADR-033） |
+| `VOLC_ASR_ENDPOINT` | sauc bigmodel_nostream | 火山流式 ASR 端点（单向，ADR-033） |
 | `VOLC_ASR_RESOURCE_ID` | `volc.bigasr.sauc.duration` | ASR 1.0 小时版；2.0 需控制台开通后切换 |
 | `MQTT_HOST` / `MQTT_PORT` | `127.0.0.1:1883` | broker 地址 |
 | `HTTP_HOST` / `HTTP_PORT` | `127.0.0.1:8000` | 调试口监听 |
@@ -188,26 +202,34 @@ server/
 ├── scripts/simulate_two_recs.py # 两段连发回归（多段收尾语义，ADR-022 修正）
 ├── scripts/simulate_talk.py     # 模拟设备实时对话（M5 联调，真实调用火山 API）
 ├── scripts/realtime_probe.py    # realtime 连通性探针（不计对话时长）
-├── scripts/asr_stream_probe.py  # 流式 ASR 探针（sauc 协议/授权/延迟）
+├── scripts/asr_stream_probe.py  # 火山流式 ASR 探针（sauc 协议/授权/延迟）
+├── scripts/asr_qwen_probe.py    # 千问流式 ASR 探针（存档回放真实链路，ADR-042）
 ├── scripts/replay_serial_recording.py  # 真机串口录音回放（旧固件 dump 模式用）
 └── src/gaga_server/
     ├── main.py             # 入口：MQTT 桥 + HTTP 调试口
-    ├── config.py           # env / .env 配置加载
+    ├── config.py           # env / .env / ~/.bailian 配置加载
+    ├── providers.py        # provider 统一登记处（ADR-043：设备 > HTTP > env）
     ├── frames.py           # 帧编解码与重组（protocol.md §2）
     ├── ogg.py              # 裸 Opus 包 ↔ Ogg 封装/解包（ADR-015）+ OggStreamWriter 增量封装（ADR-022）
+    ├── opus_codec.py       # libopus ctypes 编解码（step/gemini/qwen 共用 PCM 转码）
     ├── session.py          # 录音会话装配 + 信令分派 + talk 路由 + 流式/批处理双链路
     ├── pipeline.py         # 解码(ffmpeg) → ASR → 接入端投递 编排
     ├── mqtt_bridge.py      # 订阅 gaga/up、发布 gaga/down（JSON 信令 + 音频帧）
     ├── channels/           # 接入端抽象（ADR-030，openclaw 模式）：CHANNEL 选平台
     │   ├── base.py         #   Channel 抽象（send_text 出 / on_message 入）
     │   └── feishu.py       #   飞书：官方 API 发 + 消息轮询收（ADR-029/030）
-    ├── realtime/           # M5：豆包全双工桥（ADR-021）
-    │   ├── client.py       #   协议封装（session.create/append/mute/cancel/close）
-    │   └── bridge.py       #   TalkBridge：生命周期 + 20ms 节奏器 + 下行分发
-    ├── asr/                # provider 工厂 + local_whisper + volcengine 占位
-    │   ├── sauc.py         #   火山流式 ASR 二进制协议编解码（ADR-022）
-    │   └── volc_stream.py  #   流式 provider：帧边到边转发 + 空负包收尾 + 降级
-    └── http_api.py         # POST /debug/audio
+    ├── realtime/           # M5 实时对话（ADR-021/034/035）：provider 可插拔
+    │   ├── base.py         #   RealtimeProvider 抽象 + 归一化事件契约
+    │   ├── volc.py         #   豆包 Seeduplex（已联调）+ Hermes 工具调用（ADR-036）
+    │   ├── step.py         #   阶跃星辰 Step Audio 3 Realtime（ADR-035）
+    │   ├── gemini.py       #   Gemini Live（实现完整，待联调）
+    │   └── bridge.py       #   TalkBridge：生命周期 + 节奏器 + 事件分发 + 工具回流
+    ├── asr/                # provider 工厂 + 流式路由（ADR-043）+ 各实现
+    │   ├── qwen_message.py #   千问 message 流式（ADR-042，当前默认，润色定稿）
+    │   ├── volc_stream.py  #   火山 sauc 流式（ADR-022/033）：帧边到边转发 + 降级
+    │   ├── sauc.py         #   火山 sauc 二进制协议编解码（ADR-022）
+    │   └── local_whisper.py #  本地批处理 whisper（兜底 + HTTP 调试口）
+    └── http_api.py         # /debug/audio | /debug/reply | /debug/providers
 ```
 
 详见 ../docs/protocol.md（帧/信令/MQTT）、../docs/data-model.md（schema/错误码）、

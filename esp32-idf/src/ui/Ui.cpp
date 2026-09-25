@@ -377,6 +377,14 @@ void Ui::begin(AppState* app, MsgLog* log) {
         lv_obj_set_style_radius(arotToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
         lv_obj_add_flag(arotToggle_, LV_OBJ_FLAG_CLICKABLE);
     }
+    {   // 屏幕方向行（< 正/反 > 手动固定；自动转向关着时生效，2026-09-25）
+        lv_obj_t* row = makeRow(settingsCont_, "屏幕方向");
+        flipLeft_ = makeRoundBtn(row, "<");
+        flipVal_ = makeLabel(row, FONT_CJK, lv_color_white());
+        lv_obj_set_flex_grow(flipVal_, 1);
+        lv_obj_set_style_text_align(flipVal_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        flipRight_ = makeRoundBtn(row, ">");
+    }
     {   // 对话引擎行（< 豆包/星辰 > 循环，ADR-035）：talk 用哪个实时后端
         lv_obj_t* row = makeRow(settingsCont_, "引擎");
         prvLeft_  = makeRoundBtn(row, "<");
@@ -594,6 +602,17 @@ void Ui::begin(AppState* app, MsgLog* log) {
         if (!s_ui || s_ui->settings_ == nullptr) return;
         s_ui->applySetting(SettingKey::AutoRotate,
                            s_ui->settings_->autoRotateEnabled() ? 0 : 1, true);
+    }, LV_EVENT_CLICKED, nullptr);
+    // 屏幕方向 < >（正/反，手动固定）
+    lv_obj_add_event_cb(flipLeft_, [](lv_event_t*) {
+        if (!s_ui || s_ui->settings_ == nullptr) return;
+        s_ui->applySetting(SettingKey::ScreenFlip,
+                           s_ui->settings_->screenFlip() ? 0 : 1, true);
+    }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(flipRight_, [](lv_event_t*) {
+        if (!s_ui || s_ui->settings_ == nullptr) return;
+        s_ui->applySetting(SettingKey::ScreenFlip,
+                           s_ui->settings_->screenFlip() ? 0 : 1, true);
     }, LV_EVENT_CLICKED, nullptr);
     // 音效方案循环（鸭子版/叮咚版，交互逻辑一致）
     // （2026-09-25 用户定稿：方案选择删除——嘎=录开/发，叮咚=收，噗噗=错）
@@ -920,6 +939,7 @@ void Ui::renderSettings() {
     setTogglePill(shakeToggle_, settings_->shakeEnabled(), "");
     setTogglePill(liftToggle_,  settings_->liftEnabled(), "");
     setTogglePill(arotToggle_,  settings_->autoRotateEnabled(), "");
+    lv_label_set_text(flipVal_, settings_->screenFlip() ? "反" : "正");
     // 音效方案已定稿（嘎=录开/发，叮咚=收，噗噗=错），无设置项
     // WiFi 配置状态
     lv_label_set_text(wifiVal_, settings_->wifiConfigured() ? "已配置" : "未配置");
@@ -958,6 +978,7 @@ void Ui::applySetting(SettingKey key, int value, bool save) {
     case SettingKey::Shake:       settings_->setShakeEnabled(value != 0); break;
     case SettingKey::Lift:        settings_->setLiftEnabled(value != 0); break;
     case SettingKey::AutoRotate:  settings_->setAutoRotateEnabled(value != 0); break;
+    case SettingKey::ScreenFlip:  settings_->setScreenFlip(value != 0); break;
     case SettingKey::TalkProvider: settings_->setTalkProviderByIndex(value); break;
     }
     if (applyCb_) applyCb_(key, value);

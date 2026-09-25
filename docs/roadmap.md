@@ -26,6 +26,7 @@
 - [x] **UI 全量英文化（2026-09-25，v0.3.4）**：所有用户可见文案（按钮/状态/日志/Toast/对话框/通知/设置面板）改英语，包括状态串（"Connected …"）与 UiStyle.mark 判定前缀的联动修改；代码注释按仓库规范仍为中文
 - [x] **WiFi 配网入口暂时移除（2026-09-25，v0.3.9）**：固件侧尚无 wifi_cfg 处理，UI 入口先撤（GagaService 的 ACTION_SEND_WIFI 分支与 WiFi 扫描选择器代码保留在 git 历史，待固件支持后恢复）
 - [x] **头部渐变定稿（2026-09-25，v0.4.1）**：尝试层叠云朵自定义 View 后按用户反馈放弃（观感杂乱），定稿为奶油白→浅黄→鸭黄三段平滑线性渐变 + 底部 36dp 圆角收边；页脚改暖底墨字。全程无新依赖，纯 drawable 实现
+- [x] **MQTT 乒乓根治（2026-09-25，ADR-044，v0.4.2）**：服务端日志实锤互踢间隔恰为 automaticReconnect initialDelay（3s）——retire 断开失败（锁屏 ColorOS 掐网时极易超时）后旧客户端带着 automaticReconnect 复活，与新客户端同 ID 互踢不收敛。根治：拿掉 HiveMQ automaticReconnect，重连改由每 client 一条 supervisor 线程自管（同对象指数退避 3s→2min）；被作废的 client 断线后永不可能再自己连上（断开失败也只是占旧连接，同 ID 下次 connect 被 broker 踢掉）。下行监听改 publishes(ALL) 全局回调每 client 注册一次，重连反复 subscribe 不再叠加回调（重复下行坑一并封死）
 - [x] **ColorOS 后台权限强制引导（2026-09-24，ADR-037，v0.1.8）**：进 App onboarding 弹一次不可关闭引导 → 跳应用详情页→耗电管理（ColorOS 16 封死所有耗电页直达，真机实测）；之后被系统杀（o-kill）只写日志不弹窗。同轮修复：CDM 配对回调 ClassCastException 闪退（Android 13+ EXTRA_DEVICE 是 ScanResult）+ 权限重置后看门狗拉前台服务循环 crash（SecurityException 兜底）
 - [x] **设备端断连提示（2026-09-23，IDF 线）**：BLE 断开时按住说话/长按对话 → 屏幕提示"请打开手机App" + 滴滴
 - [ ] 真机安装 v0.1.6 + ColorOS 保活设置 + CDM 配对实测（待用户操作）

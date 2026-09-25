@@ -363,11 +363,26 @@ extern "C" void app_main() {
             case Ui::SettingKey::Subtitles:      break;  // 纯 UI 行为（Ui 内部看 settings_），无硬件动作
             case Ui::SettingKey::Shake:          break;  // Wake 每 tick 直读 settings_，无需推送
             case Ui::SettingKey::Lift:           break;  // 同上，直读
-            case Ui::SettingKey::AutoRotate:     break;  // 同上，直读
+            case Ui::SettingKey::AutoRotate:
+                // 关自动转向时按手动方向立即落位；开则交给自动规则
+                if (value == 0) {
+                    displaySetRotation(settings.screenFlip() ? 180 : 0);
+                }
+                break;
+            case Ui::SettingKey::ScreenFlip:
+                // 手动方向只在自动转向关闭时落地
+                if (!settings.autoRotateEnabled()) {
+                    displaySetRotation(value != 0 ? 180 : 0);
+                }
+                break;
             case Ui::SettingKey::TalkProvider:   break;  // provider 选择由 server 桥消费（信令下发），固件无动作
             }
         });
         ui.begin(&appState, &msgLog);
+        // 开机按已存的手动方向落位（自动转向关闭时）
+        if (!settings.autoRotateEnabled()) {
+            displaySetRotation(settings.screenFlip() ? 180 : 0);
+        }
     }
 
     appState.begin();

@@ -64,6 +64,8 @@ def create_stream_asr(cfg: "Config", registry: "ProviderRegistry") -> "StreamASR
 class StreamASRRouter:
     """按 registry 当前选择建流式会话；工厂惰性构造并缓存（False=不可用）。"""
 
+    name = "stream_router"
+
     def __init__(self, cfg: "Config", registry: "ProviderRegistry"):
         self._cfg = cfg
         self._registry = registry
@@ -87,9 +89,11 @@ class StreamASRRouter:
         return factory.start_session(on_final, on_error, on_definite)
 
     def _factory(self, name: str):
+        """当前选择的工厂实例；None = 不可用（off / 未知名 / 缺凭证）。"""
         with self._lock:
             if name in self._factories:
                 return self._factories[name]
+            factory = None
             try:
                 if name == "qwen":
                     from .qwen_message import QwenMessageASR  # noqa: PLC0415
@@ -98,11 +102,9 @@ class StreamASRRouter:
                     from .volc_stream import VolcStreamASR  # noqa: PLC0415
                     factory = VolcStreamASR(self._cfg)
                 else:
-                    factory = None
                     log.warning("未知流式 ASR 选择 %r，按批处理走", name)
             except ASRError as e:
                 log.warning("流式 ASR %s 不可用（%s），将走批处理兜底", name, e)
-                factory = False
             self._factories[name] = factory
             return factory
 

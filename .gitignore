@@ -35,3 +35,6 @@ logs/
 server/logs/
 server/data/
 server/test-audio/
+
+# 服务端运行日志
+server/server.log

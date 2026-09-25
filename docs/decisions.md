@@ -889,3 +889,82 @@
   系当初误判），无保留价值，删除。如日后需要原厂镜像，向微雪官方索取。
 - `esp32-arduino-line.tar.gz`：用户确认 Arduino 线完全不需要，删除。
 - `backup/` 目录随之移除；`reference/`（芯片参考资料）保留。
+
+## ADR-042：消息模式 ASR 豆包单向 → 千问 message（定稿润色）
+
+- **日期**：2026-09-25
+- **背景**：火山单向流式（ADR-033）出的是裸转写，无标点润色无纠错——用户实测
+  错字频出（"Today 日记"识别成"特带日记"、人名常错）。录音存档（ADR-037）回听
+  证实麦克风拾音清楚，锅在识别模型。用户选定阿里云百炼
+  `qwen-audio-3.1-asr-flash-message`：最终结果（sentence_end=true）经生成式
+  后处理——标点、文本归一化（"4乘4"→"4×4"）、去语气词/润色
+  （disfluency_removal_enabled）、结合上下文纠错。
+- **实测**（scripts/asr_qwen_probe.py，存档录音回放真实链路）：
+  松手→定稿 0.21~0.56s，与火山单向（0.39s）相当或更快——finish-task 强制收尾，
+  不用等 VAD 静音窗（手册宣称的"最后等待"实测不成立）；"特带日记"→"Today 日记"
+  （上下文纠错）、《影视飓风》自动书名号、空录音干净返回空串。
+- **选择**：
+  - 原生 WebSocket 实现（6 个事件：run-task/task-started/二进制音频/
+    result-generated/finish-task/task-finished），**不引 dashscope SDK**
+    （与 volc_stream 同构、人类易读，同接口可互换）；
+  - 上行 PCM 16k（千问仅支持 16k；opus 要 Ogg 页边界没必要），Opus 解码用
+    提升为公共模块的 `opus_codec.py`（原在 realtime/ 下，step/gemini/qwen 三家共用）；
+  - 失败自动降级本地 whisper 批处理（原有机制不变）；
+  - API Key：`DASHSCOPE_API_KEY` env → 回落 `~/.bailian/config.json`（bl CLI
+    登录产物，key 不进仓库）；WS 地址从其 base_url 推导（业务空间专属域名）。
+- **放弃**：dashscope SDK（黑盒线程/超时行为 + 新依赖）；火山 opus 流式格式
+  （PCM 最稳）；热词/context（手册支持，等真实需求再开——人名错字可望靠它根治）。
+- **备注**：豆包单向保留为可切选项（POST /debug/providers 或改 ASR_PROVIDER），
+  未见得删；实时对话（talk）链路不经过此 provider，豆包 realtime 自带 ASR 不变。
+
+## ADR-043：provider 统一登记处（providers.py）+ /debug/providers
+
+- **日期**：2026-09-25
+- **背景**：服务端可插拔能力已有三类，选择机制各搞各的：`CHANNEL` 选接入端、
+  `ASR_PROVIDER` 选 ASR、`REALTIME_PROVIDER` 选实时对话（另有设备信令覆盖）。
+  散在装配代码里，"我什么时候用什么"没有单一答案处，运行时也没法切。
+- **选择**：`providers.py` 一张登记表 + 一条优先级规则：
+  **设备信令（talk 场景） > HTTP 运行时切换 > 环境变量**。
+  - `GET /debug/providers`：三类能力当前用哪个、来源、候选清单（带中文说明）；
+  - `POST /debug/providers {"capability":"asr","provider":"qwen"}`：运行时切换，
+    即时生效于下一段录音/talk（不打断进行中的会话）；provider 传 null = 清除
+    覆盖回落环境变量；
+  - 语义差异明示在返回体 note 里：asr 下一段录音生效（设备无切换入口）；
+    realtime 设备显式指定时以设备为准（选择权在小设备，ADR-035 不动摇）；
+    channel 常驻轮询，改后需重启。
+- **理由**：一个模块一个规则，新增 provider = 实现类 + 登记表加一行；调试期
+  免重启换引擎对比效果（本次 ADR-042 的 A/B 就是这么测的）。
+- **放弃**：把 asr 切换也做进设备信令（设备上没有消息模式的设置入口，先观察
+  需求）；配置文件方案（环境变量已覆盖，不引新机制）。
+
+## ADR-044：MQTT 重连收回自管——拿掉 automaticReconnect（v0.4.2）
+
+- **日期**：2026-09-25
+- **背景**：ADR-039（MqttManager 单例化）之后乒乓仍复发。服务端日志给出铁证：
+  `session taken over` 互踢间隔精确为 3 秒 = automaticReconnect 的 initialDelay，
+  即手机进程内同时存在两个同 Client ID 的活性连接——一个是 retire() 断开失败
+  后"复活"的旧客户端。链条：锁屏时段 ColorOS 周期性掐网 → 服务重建触发
+  stop()/start() → retire 的 disconnect 最多等 3s 就放弃 → 旧 client 身上的
+  automaticReconnect 没有被摘除（HiveMQ 无"事后拆除"API）→ 网络恢复后旧
+  client 自己重连，与新 client 同 ID 互踢，双方 connect 都"成功"导致退避永远
+  重置回 3s，永不收敛。开得越久、锁屏次数越多，僵尸诞生概率越接近必然。
+- **选择**：**不用 HiveMQ automaticReconnect**，重连事务收回 MqttManager 自管：
+  - 每个 client 配一条 `mqtt-supervisor` 守护线程：connect（30s 封顶）→ 订阅
+    gaga/down → 轮询等断线 → 指数退避（3s 起、2min 封顶）后对**同一个 client
+    对象**重新 connect；
+  - 被 generation 作废的 client 没有任何自动重连路径：retire 断开失败也只是
+    占着一条旧连接，同 ID 下次 connect 时被 broker 以 session taken over 踢掉
+    （踢的只能是僵尸，方向永远是"活者踢僵尸"）；
+  - 下行监听从"每次 subscribe 带 callback"改为 `publishes(ALL)` 全局回调、
+    每 client 只注册一次——supervisor 每轮重连重新 subscribe 时不再叠加回调
+    （v0.3 踩过的重复下行坑从结构上封死，此前只靠"只在首次连接后订阅"规避）；
+  - retire 失败写一行 terminal 日志（cleanup failed (harmless)），便于现场识别。
+- **放弃**：
+  - 每实例唯一 Client ID（`app-xxx-<gen>`）：同样能让僵尸踢不到活者，但僵尸
+    会在 broker 上累积连接/订阅，且改协议文档里的 ID 约定——治标；
+  - 保留 automaticReconnect + retire 时反复重试 disconnect 直到成功：依赖
+    "disconnect 成功才拆除重连"的时序，掐网窗口内保证不了——治标；
+  - unique ID + 自动重连兜底双保险：两条重连机制并存反而更难推理。
+- **备注**：与 ADR-039 的关系——039 解决"多实例并发"，044 解决"僵尸复活"，
+  两条合起来才是完整的乒乓根治。ColorOS 后台周期性断网本身是 ROM 行为不受
+  本 ADR 管（断网造成的断连由 supervisor 正常退避重连，属预期自愈）。

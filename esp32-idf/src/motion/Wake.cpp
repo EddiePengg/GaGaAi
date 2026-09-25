@@ -146,13 +146,12 @@ Wake::Event Wake::tick() {
     return Event::None;
 }
 
-// 自动转向 v2：绝对持握角判向（2026-09-25 用户反馈"挂起/抬起相位相反"
-// ——参考角法在翻面方向不同（左翻/右翻）时会差 180°，弃用）。
-// 十场景 ⑩ 段数据实证：内容端正观看时，重力面内投影指向 +X
-// （atan2(ay,ax)≈0°）。规则：
-//   面内重力朝 -X 半球 = 内容倒置 → 翻 180°；朝 +X 半球 = 正常 → 0°。
-//   屏幕近朝天/朝地（挂脖，|az|>0.7）无面内分量 → 不判向，维持原状。
-//   400ms 稳定确认 + dev<0.2g 静止门，防摆动途中乱翻。
+// 自动转向 v5.1：X 轴符号判向（极性按用户实测"完全反了"翻转，2026-09-25）。
+// 定轴依据：标注双姿势数据——自然轻拿（70°）与竖直（90°+）面内重力方向
+// 几乎相同（atan2 ≈175°/181°，即 ax<0），唯一稳定特征 = ax 符号。
+// 规则：ax < 0（自然观看）→ 翻转 180°；ax ≥ 0（上下颠倒拿）→ 0°。
+// 此前 ay 符号规则两桶均值仅 ±0.06（σ0.15）= 读噪声随机翻转，废弃。
+// 平时（亮屏+静止）持续维持可读；挂脖朝地（|az|>0.7）不判向。
 void Wake::tickRotation(float dev, uint32_t now) {
     if (settings_ != nullptr && !settings_->autoRotateEnabled()) return;
     if (app_ == nullptr || app_->screen() != ScreenState::On) {
@@ -167,8 +166,7 @@ void Wake::tickRotation(float dev, uint32_t now) {
         rotSteadySince_ = 0;   // 朝天/朝地：面内无重力分量，不判向
         return;
     }
-    const float th = atan2f(ay_, ax_);
-    const int cand = (th >= -1.5708f && th <= 1.5708f) ? 0 : 180;
+    const int cand = (ax_ < 0.0f) ? 180 : 0;
     if (cand != rotCandDeg_ || rotSteadySince_ == 0) {
         rotCandDeg_ = cand;
         rotSteadySince_ = now;
@@ -176,7 +174,7 @@ void Wake::tickRotation(float dev, uint32_t now) {
     }
     if (now - rotSteadySince_ >= 400 && cand != rotCurDeg_) {
         rotCurDeg_ = cand;
-        ESP_LOGI(TAG, "[ROT] 持握角 %.0f° → %s", th * 57.29578f,
+        ESP_LOGI(TAG, "[ROT] ax=%+.2f → %s", ax_,
                  cand == 180 ? "翻转" : "正位");
         if (onRotation_) onRotation_(cand);
     }

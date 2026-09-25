@@ -6,7 +6,6 @@ import logging
 import uvicorn
 
 from .asr import create_asr, create_local_fallback, create_stream_asr
-from .asr.base import ASRError
 from .channels import create_channel
 from .channels.base import ChannelError
 from .config import load_config
