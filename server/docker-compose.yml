@@ -1,0 +1,25 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  server:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MQTT_HOST: mosquitto      # compose 网络内直连 broker
+      HTTP_HOST: 0.0.0.0
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mosquitto
+    volumes:
+      - whisper-cache:/root/.cache/huggingface  # 模型只下载一次
+
+volumes:
+  whisper-cache:

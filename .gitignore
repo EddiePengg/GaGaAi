@@ -1,0 +1,37 @@
+# ===== macOS / 编辑器 / 本地工具 =====
+.DS_Store
+.vscode/
+.idea/
+.zcodeignore
+app/local.properties
+
+# ===== 依赖与构建产物（体积大，不入库；重建方式见各 README）=====
+
+# Python（server）— uv sync 重建
+server/.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Android / Gradle — ./gradlew assembleDebug 重建
+app/.gradle/
+app/.kotlin/
+app/build/
+app/app/build/
+*.apk
+
+# ESP-IDF / PlatformIO — 组件经 src/idf_component.yml 拉取（ADR-020）
+esp32-idf/.pio/
+esp32-idf/managed_components/
+esp32-idf/sdkconfig
+esp32-idf/sdkconfig.old
+esp32-idf/logs/
+
+# ===== 第三方参考资料快照（~280MB，本地自取，见 reference/README.md）=====
+reference/waveshare-1.75C-repo/
+
+# ===== 运行时数据与日志 =====
+logs/
+server/logs/
+server/data/
+server/test-audio/

@@ -1,0 +1,16 @@
+# IDF Component Manager 依赖清单
+# 微雪官方 BSP（ADR-020）：显示/触摸/音频(ES7210+ES8311)/I2C/TCA9554 一站式初始化
+# BSP 3.0.1 经 esp_lvgl_adapter(~0.6) 拉起 LVGL；idf>=5.5 由 espressif32@6.13(IDF 5.5.x) 满足
+dependencies:
+  waveshare/esp32_s3_touch_amoled_1_75c:
+    version: "^3.0.0"
+    public: true
+  lvgl/lvgl:
+    version: "9.4.*"
+    public: true
+  espressif/esp_audio_codec:
+    version: "^2.6.2"   # Opus 编解码（esp_opus_enc/dec_* 直接 API；底层乐鑫优化 libopus）
+    public: true
+  idf: ">=5.5"
+  espressif/esp-sr:
+    version: "^2.0.0"

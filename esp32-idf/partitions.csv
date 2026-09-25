@@ -1,0 +1,9 @@
+# 32MB (0x2000000) 分区表 —— 与 Arduino 线（esp32/partitions.csv）保持一致，
+# 两条固件线互换刷写时布局不变（OTA 双 app 槽各 8MB + ~15.9MB 资源区）
+# Name,   Type, SubType, Offset,  Size,     Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 8M,
+ota_0,    app,  ota_0,   ,        8M,
+otadata,  data, ota,     ,        0x2000,
+littlefs, data, spiffs,  ,        0xFEE000,

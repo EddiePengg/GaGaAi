@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#E6E3DF</color>
+
+    <!-- 嘎嘎主题：暖底 + 鸭黄 + 墨色 -->
+    <color name="bg_warm">#FFF6E3</color>
+    <color name="duck_yellow">#FFC93C</color>
+    <color name="duck_yellow_dark">#E8A317</color>
+    <color name="ink">#33302E</color>
+    <color name="ink_soft">#8A8577</color>
+    <color name="card_stroke">#F3E7CC</color>
+
+    <!-- 链路节点 -->
+    <color name="ok_green">#34A853</color>
+    <color name="busy_amber">#F5A623</color>
+    <color name="node_gray">#D8D3C4</color>
+    <color name="stop_red">#E8503A</color>
+    <color name="stop_red_dark">#D13F2A</color>
+    <color name="header_top">#FFFBEE</color>
+    <color name="header_bottom">#FFD75E</color>
+
+    <!-- 终端日志 -->
+    <color name="terminal_bg">#23222B</color>
+    <color name="terminal_text">#C9F2C7</color>
+</resources>

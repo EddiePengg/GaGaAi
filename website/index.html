@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gaga ai · an AI portal on your chest</title>
+  <meta name="description" content="gaga ai (Grasp up, Get AI) is a one-hand AI portal worn on your chest: press, speak, and your words land in your Feishu group where Hermes answers. Riding, cooking — your other hand never stops.">
+  <meta property="og:title" content="gaga ai · an AI portal on your chest">
+  <meta property="og:description" content="Speak with one press; your other hand never leaves the job.">
+  <meta property="og:image" content="assets/goose.jpg">
+  <link rel="alternate" hreflang="en" href="./?lang=en">
+  <link rel="alternate" hreflang="zh" href="./?lang=zh">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main" data-i18n="a11y.skip">Skip to content</a>
+
+  <header class="site-header">
+    <div class="container site-header__inner">
+      <a class="brand" href="#top" aria-label="gaga ai — back to top">
+        <svg class="brand__duck" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+          <path d="M12 42c0-8 8-13 18-13s20 5 20 13-9 14-19 14S12 50 12 42Z" fill="var(--duck-body)"/>
+          <circle cx="40" cy="22" r="12" fill="var(--duck-accent)"/>
+          <path d="M51 20c4 0 8 2 8 4.5S55 29 51 29c-1.6 0-3-1.4-3-4.5S49.4 20 51 20Z" fill="var(--duck-beak)"/>
+          <circle cx="43" cy="19" r="2.2" fill="var(--duck-eye)"/>
+          <path d="M20 44c4-4 12-5 17-3" fill="none" stroke="var(--duck-wing)" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+        <span class="brand__name">gaga&nbsp;ai</span>
+      </a>
+      <nav class="site-nav" aria-label="Page">
+        <a href="#how" data-i18n="nav.how">How it works</a>
+        <a href="#features" data-i18n="nav.features">Features</a>
+        <a href="#hardware" data-i18n="nav.hardware">Hardware</a>
+        <a href="#roadmap" data-i18n="nav.roadmap">Roadmap</a>
+        <a href="#soon" data-i18n="nav.soon">Coming soon</a>
+      </nav>
+      <div class="lang-switch" role="group" data-i18n-aria="a11y.lang" aria-label="Language">
+        <button type="button" data-lang="en" aria-current="true">EN</button>
+        <button type="button" data-lang="zh" lang="zh-CN">中文</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ============ Hero: one big goose ============ -->
+    <!-- Hero goose photo: Wikimedia Commons "A photo of a beautiful guard bird or goose with a Bokeh effect" (CC BY-SA 4.0) -->
+    <section class="hero" id="top">
+      <figure class="hero__goose">
+        <img src="assets/goose.jpg" alt="A white goose leans its head in from the left, orange beak pointing right, watching you" width="1600" height="1200" fetchpriority="high">
+      </figure>
+      <div class="hero__copy">
+        <h1 class="hero__title"><span data-i18n="hero.title1">GAGA</span>&nbsp;<span class="hero__title-accent">AI</span></h1>
+        <p class="hero__sub">grass up and get AI</p>
+        <a class="hero__scroll" href="#intro"><span data-i18n="hero.scroll">Scroll on — see what this goose is up to</span><span class="hero__scroll-arrow" aria-hidden="true">↓</span></a>
+      </div>
+    </section>
+
+    <!-- ============ Intro ============ -->
+    <section class="intro container" id="intro">
+      <div class="intro__copy">
+        <p class="intro__kicker" data-i18n="intro.kicker">Grasp up, Get AI · a one-hand AI portal on your chest 🦆</p>
+        <h2 class="intro__title" data-i18n="intro.title">One hand talks.<br>The other keeps working.</h2>
+        <p class="intro__lede" data-i18n="intro.lede">
+          gaga ai is an AI portal you wear on your chest: hold a button, speak,
+          and your words land as text in your Feishu group. Hermes answers on
+          the spot, and the device chirps the reply back to you. Riding, cooking,
+          carrying stuff — your hands never stop.
+        </p>
+        <div class="intro__actions">
+          <a class="btn btn--primary" href="#how" data-i18n="intro.cta.how">See how it works</a>
+          <a class="btn btn--ghost" href="#roadmap" data-i18n="intro.cta.roadmap">View the roadmap</a>
+        </div>
+        <dl class="intro__stats">
+          <div class="stat">
+            <dt data-i18n="stat1.dt">Speech → Feishu text</dt>
+            <dd>≈2&thinsp;s<small data-i18n="stat1.small">Streaming ASR, straight through</small></dd>
+          </div>
+          <div class="stat">
+            <dt data-i18n="stat2.dt">The full loop</dt>
+            <dd>M1–M4<small data-i18n="stat2.small">Core promise shipped</small></dd>
+          </div>
+          <div class="stat">
+            <dt data-i18n="stat3.dt">Round display</dt>
+            <dd>466×466<small>1.75″ AMOLED</small></dd>
+          </div>
+          <div class="stat">
+            <dt data-i18n="stat4.dt">Uplink framing</dt>
+            <dd>20&thinsp;ms<small>Opus · MTU 517</small></dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="intro__terminal terminal reveal" role="img" data-i18n-aria="term.aria" aria-label="Demo: after a push-to-talk, speech is transcribed and sent to Feishu; Hermes replies and the device gets a receipt">
+        <div class="terminal__bar" aria-hidden="true">
+          <span></span><span></span><span></span>
+          <em>gaga — quack quack · I’m listening</em>
+        </div>
+        <pre class="terminal__body" aria-hidden="true" data-i18n="term.body"><span class="t-dim">$</span> bottom-right key · hold to talk
+  <span class="t-accent">beep</span> → “Can I go biking today?” → <span class="t-accent">beep</span>
+
+<span class="t-ok">✓</span> streaming ASR · <span class="t-num">1.9s</span>
+<span class="t-ok">→</span> Feishu · Hermes
+  Sure! Wind drops after 6 pm —<br>  helmet on and go 🦆
+
+<span class="t-ok">✓</span> receipt · the device chirps · <span class="t-dim">reply on your card</span>
+
+<span class="t-duck">   __
+ &lt;(o )___
+  ( ._&gt; /
+   `---'</span></pre>
+      </div>
+    </section>
+
+    <!-- ============ How it works ============ -->
+    <section class="section container" id="how">
+      <header class="section__head reveal">
+        <h2 data-i18n="how.title">How it works</h2>
+        <p class="section__lede" data-i18n="how.lede">
+          Five steps, from your mouth to the group chat and back to your chest.
+          The app is a dumb pipe that understands nothing — every bit of
+          complexity lives on the server.
+        </p>
+      </header>
+      <ol class="pipeline stagger reveal">
+        <li class="pipeline__step">
+          <span class="pipeline__num" aria-hidden="true">1</span>
+          <h3 data-i18n="how.s1.t">Hold to talk</h3>
+          <p data-i18n="how.s1.p">Long-press the bottom-right key: beep → speak → release to send. A 500&thinsp;ms release grace absorbs grip wobble.</p>
+        </li>
+        <li class="pipeline__step">
+          <span class="pipeline__num" aria-hidden="true">2</span>
+          <h3 data-i18n="how.s2.t">BLE → App</h3>
+          <p data-i18n="how.s2.p">Bluetooth hands 20&thinsp;ms Opus frames to the phone app; the app forwards bytes and understands none of it.</p>
+        </li>
+        <li class="pipeline__step">
+          <span class="pipeline__num" aria-hidden="true">3</span>
+          <h3 data-i18n="how.s3.t">The server</h3>
+          <p data-i18n="how.s3.p">The only brain: always-on MQTT signaling, streaming ASR, sessions and tools all live here.</p>
+        </li>
+        <li class="pipeline__step">
+          <span class="pipeline__num" aria-hidden="true">4</span>
+          <h3 data-i18n="how.s4.t">Feishu · Hermes</h3>
+          <p data-i18n="how.s4.p">Text lands in the group and the agent replies. The channel layer is abstracted — WeChat and Telegram can plug in later.</p>
+        </li>
+        <li class="pipeline__step">
+          <span class="pipeline__num" aria-hidden="true">5</span>
+          <h3 data-i18n="how.s5.t">Receipt downlink</h3>
+          <p data-i18n="how.s5.p">The device chirps; the recognized text and the reply show up as cards — the screen even lights up for them.</p>
+        </li>
+      </ol>
+      <p class="section__note" data-i18n="how.note">
+        Light signaling always on, heavy media only when needed — between talks,
+        just a heartbeat of a few dozen bytes stays alive. That is how a pendant
+        survives the day. Home-Wi-Fi direct mode is on the roadmap.
+      </p>
+    </section>
+
+    <!-- ============ Features ============ -->
+    <section class="section container" id="features">
+      <header class="section__head reveal">
+        <h2 data-i18n="feat.title">All from one hand</h2>
+        <p class="section__lede" data-i18n="feat.lede">Six features that grew out of a “my hands are full” life.</p>
+      </header>
+      <ul class="feature-grid stagger reveal">
+        <li class="feature-card">
+          <svg class="feature-card__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="9" y="3" width="6" height="11" rx="3"/>
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+          </svg>
+          <h3 data-i18n="feat.1.t">Push to talk</h3>
+          <p data-i18n="feat.1.p">Like a walkie-talkie: hold, speak, let go. A red dot with a timer while recording, then “sending → ✅”.</p>
+        </li>
+        <li class="feature-card">
+          <svg class="feature-card__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M3 12h2l2-5 3 10 3-14 3 12 2-3h3"/>
+          </svg>
+          <h3 data-i18n="feat.2.t">Realtime full duplex</h3>
+          <p data-i18n="feat.2.p">Long-press the top-right key and just talk, straight into Volcano Realtime; toggle subtitles to follow every word.</p>
+        </li>
+        <li class="feature-card">
+          <svg class="feature-card__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="7" y="4" width="14" height="10" rx="2"/>
+            <path d="M7 9H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3"/>
+          </svg>
+          <h3 data-i18n="feat.3.t">Replies as cards</h3>
+          <p data-i18n="feat.3.p">A message-card list plus a status bar; the full GB2312 glyph set (8,000+ codepoints) means Chinese replies never lose a character.</p>
+        </li>
+        <li class="feature-card">
+          <svg class="feature-card__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 3l8 3v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-3Z"/>
+            <path d="M9 12l2 2 4-4"/>
+          </svg>
+          <h3 data-i18n="feat.4.t">A dumb pipe, for privacy</h3>
+          <p data-i18n="feat.4.p">The app only forwards BLE↔MQTT bytes and understands none of it; no secrets ever live on the device.</p>
+        </li>
+        <li class="feature-card">
+          <svg class="feature-card__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="4" y="4" width="16" height="7" rx="2"/>
+            <rect x="4" y="13" width="16" height="7" rx="2"/>
+            <path d="M8 7.5h.01M8 16.5h.01"/>
+          </svg>
+          <h3 data-i18n="feat.5.t">The server is the only brain</h3>
+          <p data-i18n="feat.5.p">Auth, ASR, tool calls and logs all live server-side. New features touch only the server; the device stays boring-stable.</p>
+        </li>
+        <li class="feature-card">
+          <svg class="feature-card__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="3" y="8" width="16" height="8" rx="2"/>
+            <path d="M21 11v2M7 12h6"/>
+          </svg>
+          <h3 data-i18n="feat.6.t">Every milliamp counts</h3>
+          <p data-i18n="feat.6.p">Power-on on demand, downclock with the screen off, deep sleep when idle; AMOLED black pixels draw nothing — the deep-black theme saves by design.</p>
+        </li>
+      </ul>
+    </section>
+
+    <!-- ============ Hardware ============ -->
+    <section class="section container" id="hardware">
+      <header class="section__head reveal">
+        <h2 data-i18n="hw.title">The hardware on your chest</h2>
+        <p class="section__lede" data-i18n="hw.lede">
+          A Waveshare ESP32-S3 1.75″ AMOLED round touch board in an aluminum
+          case with a lanyard — every pin and driver copied from official
+          sources, nothing guessed.
+        </p>
+      </header>
+      <dl class="spec-grid stagger reveal">
+        <div class="spec"><dt data-i18n="hw.k1">MCU</dt><dd data-i18n="hw.v1">ESP32-S3R8 · dual-core 240&thinsp;MHz · 8&thinsp;MB PSRAM</dd></div>
+        <div class="spec"><dt data-i18n="hw.k2">Storage</dt><dd>32&thinsp;MB Flash</dd></div>
+        <div class="spec"><dt data-i18n="hw.k3">Display</dt><dd>1.75″ AMOLED · 466×466 · CO5300</dd></div>
+        <div class="spec"><dt data-i18n="hw.k4">Touch</dt><dd>CST9217 (I2C)</dd></div>
+        <div class="spec"><dt data-i18n="hw.k5">Microphones</dt><dd data-i18n="hw.v5">Dual mics · ES7210 · hardware AEC</dd></div>
+        <div class="spec"><dt data-i18n="hw.k6">Speaker</dt><dd data-i18n="hw.v6">ES8311 + NS4150B amp</dd></div>
+        <div class="spec"><dt data-i18n="hw.k7">Motion</dt><dd data-i18n="hw.v7">QMI8658 6-axis · in-sensor double-tap engine</dd></div>
+        <div class="spec"><dt data-i18n="hw.k8">Power</dt><dd data-i18n="hw.v8">AXP2101 PMU · 400&thinsp;mAh Li-ion · Type-C</dd></div>
+        <div class="spec"><dt data-i18n="hw.k9">Wearing</dt><dd data-i18n="hw.v9">Aluminum case + lanyard, worn on the chest</dd></div>
+        <div class="spec"><dt data-i18n="hw.k10">Keys</dt><dd data-i18n="hw.v10">Top right: wake / hold to chat · Bottom right: hold to talk</dd></div>
+      </dl>
+    </section>
+
+    <!-- ============ Roadmap ============ -->
+    <section class="section container" id="roadmap">
+      <header class="section__head reveal">
+        <h2 data-i18n="rm.title">Roadmap</h2>
+        <p class="section__lede" data-i18n="rm.lede">Kept in sync with <code>docs/roadmap.md</code> in the repo — only the main line lives here.</p>
+      </header>
+      <ol class="timeline">
+        <li class="timeline__item">
+          <span class="badge badge--done" data-i18n="badge.done">✓ Done</span>
+          <div>
+            <h3 data-i18n="rm.m1.t">M1 · Server pipeline <small>2026-09-22</small></h3>
+            <p data-i18n="rm.m1.p">MQTT broker + streaming ASR (Volcano passthrough, 1.6–2.2&thinsp;s) + the Feishu channel — receipt loop closed.</p>
+          </div>
+        </li>
+        <li class="timeline__item">
+          <span class="badge badge--done" data-i18n="badge.done">✓ Done</span>
+          <div>
+            <h3 data-i18n="rm.m2.t">M2 · Android dumb pipe <small>2026-09-22</small></h3>
+            <p data-i18n="rm.m2.p">Foreground-service keep-alive stack, companion-device auto pairing, the MQTT ping-pong fix.</p>
+          </div>
+        </li>
+        <li class="timeline__item">
+          <span class="badge badge--done" data-i18n="badge.done">✓ Done</span>
+          <div>
+            <h3 data-i18n="rm.m3.t">M3 · Device firmware (Arduino / IDF) <small>2026-09-22–23</small></h3>
+            <p data-i18n="rm.m3.p">Board-isolated <code>variants/</code>, round display lit, audio uplink working; the IDF line reached a “minimum viable duck”.</p>
+          </div>
+        </li>
+        <li class="timeline__item timeline__item--milestone">
+          <span class="badge badge--done" data-i18n="badge.done">✓ Done</span>
+          <div>
+            <h3 data-i18n="rm.m4.t">M4 · The full loop, closed <small>2026-09-23</small></h3>
+            <p data-i18n="rm.m4.p">Press, speak → text in Feishu → Hermes answers → the device chirps. The core promise, kept 🎉</p>
+          </div>
+        </li>
+        <li class="timeline__item">
+          <span class="badge badge--wip" data-i18n="badge.wip">◐ In progress</span>
+          <div>
+            <h3 data-i18n="rm.m5.t">M5 · Realtime full-duplex chat</h3>
+            <p data-i18n="rm.m5.p">Doubao Realtime bridged through two live conversations; AEC, barge-in and exit intent are being tuned.</p>
+          </div>
+        </li>
+        <li class="timeline__item">
+          <span class="badge badge--wip" data-i18n="badge.wip">◐ In progress</span>
+          <div>
+            <h3 data-i18n="rm.m6.t">M6 · Experience layer</h3>
+            <p data-i18n="rm.m6.p">Deep-black theme, settings, message cards, goose page and quick panel shipped; AOD watch face and IMU particles next.</p>
+          </div>
+        </li>
+        <li class="timeline__item">
+          <span class="badge badge--plan" data-i18n="badge.plan">○ Planned</span>
+          <div>
+            <h3 data-i18n="rm.next.t">Beyond</h3>
+            <p data-i18n="rm.next.p">Home-Wi-Fi direct (no phone in the middle), keyword wake-up, multiple devices.</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ============ Coming soon (placeholders) ============ -->
+    <section class="section container" id="soon">
+      <header class="section__head reveal">
+        <h2 data-i18n="soon.title">Coming soon</h2>
+        <p class="section__lede" data-i18n="soon.lede">Docs, tutorials and a community are on the way. The seats are reserved — content moves in as it is ready.</p>
+      </header>
+      <ul class="soon-grid stagger reveal">
+        <li class="soon-card">
+          <div class="soon-card__head">
+            <h3 data-i18n="soon.docs.t">Docs</h3>
+            <span class="badge badge--wip" data-i18n="soon.badge.wip">In the works</span>
+          </div>
+          <p data-i18n="soon.docs.p">Architecture, protocol, data model and every decision record, being polished into a proper docs site.</p>
+          <p class="soon-card__hint" data-i18n="soon.docs.hint">For now, read <code>docs/</code> in the repo — the single source of truth.</p>
+        </li>
+        <li class="soon-card">
+          <div class="soon-card__head">
+            <h3 data-i18n="soon.tut.t">Tutorials</h3>
+            <span class="badge badge--plan" data-i18n="soon.badge.plan">Planned</span>
+          </div>
+          <p data-i18n="soon.tut.p">From backing up the factory firmware to lighting the round screen and flying your first words into Feishu.</p>
+          <p class="soon-card__hint" data-i18n="soon.tut.hint">Written for a zero-to-demo afternoon.</p>
+        </li>
+        <li class="soon-card">
+          <div class="soon-card__head">
+            <h3 data-i18n="soon.comm.t">Community</h3>
+            <span class="badge badge--plan" data-i18n="soon.badge.plan">Planned</span>
+          </div>
+          <p data-i18n="soon.comm.p">A group chat, feature discussions and a “show off your duck” column — channels will be announced right here.</p>
+          <p class="soon-card__hint" data-i18n="soon.comm.hint">Want to know first? Watch the repo.</p>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container site-footer__inner">
+      <p class="site-footer__brand" data-i18n="footer.brand">gaga ai · Grasp up, Get AI · the one-hand AI portal on your chest 🦆</p>
+      <nav class="site-footer__nav" aria-label="Footer">
+        <a href="#how" data-i18n="nav.how">How it works</a>
+        <a href="#features" data-i18n="nav.features">Features</a>
+        <a href="#hardware" data-i18n="nav.hardware">Hardware</a>
+        <a href="#roadmap" data-i18n="nav.roadmap">Roadmap</a>
+        <a href="#soon" data-i18n="nav.soon">Coming soon</a>
+      </nav>
+      <p class="site-footer__meta" data-i18n="footer.meta">A static showcase page, kept in sync with <code>docs/</code> in the repo.<br>Hero goose photo from Wikimedia Commons (CC BY-SA 4.0)<br>© 2026 the gaga ai project</p>
+    </div>
+  </footer>
+
+  <script src="assets/i18n.js" defer></script>
+  <script src="assets/main.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+# sdkconfig 基线 —— esp32-idf（微雪 ESP32-S3-Touch-AMOLED-1.75）
+# 出处：微雪官方 IDF 示例 02_lvgl_demo_v9 的 sdkconfig.defaults（其 CI 用 IDF v5.5.x 验证），
+#       按本板实情修正 flash 容量 16MB→32MB（esptool 实测，见 docs/hardware.md），
+#       并追加 NimBLE / USB 控制台配置。
+# PlatformIO 构建时以此生成 sdkconfig.<env>；改配置改这里，别手改生成物。
+
+# ---- Flash / 分区 ----
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- PSRAM：ESP32-S3R8 叠封 8MB octal PSRAM（= Arduino 线 memory_type=qio_opi 的 opi 侧）----
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+# 内部 RAM 瘦身（真机踩实 2026-09-23：opus 编码器态 ~50KB 把内部堆吃到 ~1KB，
+# LVGL 全屏 flush 的 SPI 反弹缓冲都分配失败）：>16KB 的 malloc 自动落 PSRAM。
+# DMA/ISR 类分配走显式 MALLOC_CAP_DMA/INTERNAL，不受影响。
+# 2026-09-24 下调 16384→256：消息卡 UI 20 卡×3 对象全是小块 malloc，ALWAYSINTERNAL
+# 的"小块内部优先"让它们绕过 SPIRAM_MALLOC_RESERVE_INTERNAL 的 32KB DMA 保留，
+# 把内部堆吃到 6.6KB——SPI 刷屏反弹缓冲（466×10×2≈9.3KB，MALLOC_CAP_DMA）分不出来，
+# 真机报满屏 "Draw bitmap failed: ESP_ERR_NO_MEM"。现在小块也落 PSRAM，内部留给 DMA。
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=256
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# ---- CPU / RTOS ----
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# ---- 控制台走原生 USB（Type-C，macOS 识别为 /dev/cu.usbmodem*）----
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ---- 蓝牙：NimBLE host（IDF 内置 bt 组件；对应 Arduino 线 ADR-011 的 NimBLE 选型）----
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# ---- LVGL 9（BSP 经 esp_lvgl_adapter 拉起；裁剪自官方 demo 的 LVGL 配置块）----
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_DEF_REFR_PERIOD=15
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+# 中文走自生子集字体（assets/fonts/，OFL 思源黑体）；ESP 内置 SourceHanSans 子集不含
+# "录/连"等字（豆腐块实锤）不再启用，省 ~1.2MB flash
+# 屏幕像素快照自证渲染（串口 'p'）：LVGL 离线渲染当前屏 → 统计/ASCII 画
+CONFIG_LV_USE_SNAPSHOT=y
+CONFIG_LV_TXT_BREAK_CHARS=" ,.;:-_"
+
+# NOTE: BSP 的 CONFIG_BSP_ERROR_CHECK 保持默认 y（=n 时代码路径有类型错误编译不过，
+# BSP 作者只测过默认值；音频/显示初始化失败会以 assert 形式暴露，bring-up 期反而更好排查）
+
+# ---- esp-sr 语音唤醒（ADR-032）----
+CONFIG_SR_WN_WN9_HILEXIN=y   # 唤醒词"Hi,乐鑫"（你好乐行）；Hi,ESP/你好小智备选模型也在库内
+
+# 内存体检（'h' 命令）：任务栈水位需要遍历任务表（2026-09-25 内存事故后的观测能力）
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# NimBLE 内存走 PSRAM 外挂（2026-09-25：片上被 BLE 吃掉几十 KB 是刷屏 NO_MEM
+# 与滚动卡顿的共同根源；NimBLE 官方支持 external 分配，吞吐无损）
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+
+# ---- WiFi 直连 MQTT 的内存瘦身（家模式，ADR-039 B 期）----
+# 单 binary 里 WiFi/lwIP/mqtt 的静态 BSS 必然链接进来，能省则省：
+CONFIG_LWIP_MAX_SOCKETS=6
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=12

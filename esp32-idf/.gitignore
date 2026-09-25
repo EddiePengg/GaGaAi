@@ -1,0 +1,4 @@
+.pio/
+build/
+managed_components/
+sdkconfig.waveshare-s3-amoled-1_75

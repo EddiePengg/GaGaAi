@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="GagaTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/bg_warm</item>
+        <item name="android:statusBarColor">@color/bg_warm</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">@color/duck_yellow_dark</item>
+    </style>
+</resources>
