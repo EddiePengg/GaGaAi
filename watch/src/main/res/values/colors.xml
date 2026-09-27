@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与 :app 同一套嘎嘎品牌色（鸭黄 + 暖底 + 墨色），见 ADR-046 手表客户端立项 -->
+    <color name="ic_launcher_background">#E6E3DF</color>
+
+    <color name="bg_warm">#FFF6E3</color>
+    <color name="duck_yellow">#FFC93C</color>
+    <color name="duck_yellow_dark">#E8A317</color>
+    <color name="ink">#33302E</color>
+    <color name="ink_soft">#8A8577</color>
+    <color name="card_stroke">#F3E7CC</color>
+
+    <color name="ok_green">#34A853</color>
+    <color name="busy_amber">#F5A623</color>
+    <color name="stop_red">#E8503A</color>
+
+    <!-- 终端/调试面板 -->
+    <color name="terminal_bg">#23222B</color>
+    <color name="terminal_text">#C9F2C7</color>
+</resources>

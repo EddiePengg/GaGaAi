@@ -29,7 +29,7 @@ struct AppContext {
     Link*        link    = nullptr;  // 当前链路（BLE 或 WiFi，ADR-039）
     TalkSession* talk    = nullptr;  // realtime 对话
     OpusEnc*     enc     = nullptr;  // Opus 编码器
-    Recorder*    rec     = nullptr;  // 按住说话（确认窗/宽限/建卡）
+    Recorder*    rec     = nullptr;  // 录音语义（点对点开合/确认窗/建卡）
     UplinkPump*  pump    = nullptr;  // 上行泵（mic→Opus→BLE）
     Wake*        wake    = nullptr;  // 唤醒检测（tap/抬手）
     Power*       power   = nullptr;  // 低功耗

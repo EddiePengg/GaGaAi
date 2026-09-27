@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ③ 快捷面板（顶部下滑呼出）
+     尺寸约束（2026-09-26 真机报障修正）：屏是 466px @320dpi = **233×233dp**
+     的圆屏，早期版本内容算下来 318dp，gravity=center 让上下各溢出 42dp——
+     标题只剩半行、底部按钮被切、能点的区域被挤出圆外。
+     现在：ScrollView 兜底 + 紧凑字号 + 36dp 横向内边距（圆屏左右不裁字） -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/terminal_bg"
+    android:fadeScrollbars="false"
+    android:paddingStart="36dp"
+    android:paddingTop="18dp"
+    android:paddingEnd="36dp"
+    android:scrollbars="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="控制中心"
+            android:textColor="@color/ink_soft"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/btnToggleSound"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_btn_primary"
+            android:gravity="center"
+            android:padding="8dp"
+            android:text="提示音：开"
+            android:textColor="@color/ink"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/btnOpenSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_btn_ghost"
+            android:gravity="center"
+            android:padding="8dp"
+            android:text="⚙ 设置"
+            android:textColor="@color/bg_warm"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/btnOpenDebug"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_btn_ghost"
+            android:gravity="center"
+            android:padding="8dp"
+            android:text="🔧 调试"
+            android:textColor="@color/bg_warm"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/btnClosePanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:padding="6dp"
+            android:text="收起"
+            android:textColor="@color/ink_soft"
+            android:textSize="11sp" />
+
+    </LinearLayout>
+</ScrollView>

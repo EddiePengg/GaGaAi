@@ -13,4 +13,4 @@
 //         返回/鸭子页，ADR-035/036）+ talk 优化（provider 化/字幕开关/ASR
 //         清屏，ADR-034）+ 回复全文容量 2048B/PSRAM/滚动条（2026-09-25）
 #define FW_VERSION "0.5.0"
-#define DEVICE_ID  "gaga-01"  // 设备名（hello 信令里上报）
+#define DEVICE_ID  "gaga-01"  // 设备名（hello 信令里上报；2026-09-27 起也随 rec/rec_status 信令上报，服务端按 device 记账——多设备串扰修复）

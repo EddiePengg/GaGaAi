@@ -3,7 +3,7 @@
 // 任务拉起。业务实现全在各自模块里（ADR-038 重构）：
 //   state/  状态机/消息/设置     ui/    界面/显示
 //   audio/  音频前端/上行泵      ble/   GATT 服务端（发送自带锁）
-//   rec/    按住说话语义         talk/  realtime 会话
+//   rec/    录音语义（点对点开合）  talk/  realtime 会话
 //   motion/ IMU 驱动/唤醒检测     power/ 低功耗
 //   debug/  串口调试命令         protocol/ 帧编解码
 // 链路（docs/protocol.md）：按键 → Recorder/TalkSession → BLE 帧 → App（哑管道）
@@ -122,8 +122,23 @@ static void handleJsonSignal(const char* json) {
     if (cJSON_IsNumber(ts) && ts->valuedouble > 1600000000.0) {
         rtcSetUnix(static_cast<int64_t>(ts->valuedouble));
     }
+    // 设备过滤（2026-09-27 多设备串扰修复）：receipt/reply/error 服务端盖
+    // device 戳（消息归属设备）；带戳且不是本机的直接忽略——手表和胸前
+    // 嘎嘎同群同 broker，不过滤的话手表的 ASR 文本会经 FIFO 灌进本机卡片
+    //（真机实锤）。不带戳 = 旧服务端/广播信令，维持兼容不过滤。
+    const cJSON* dv = cJSON_GetObjectItem(root, "device");
     const cJSON* type = cJSON_GetObjectItem(root, "type");
     const char* t = cJSON_IsString(type) ? type->valuestring : "";
+    const bool needsDevice = strncmp(t, "receipt", 7) == 0 ||
+                              strncmp(t, "reply", 5) == 0 ||
+                              strncmp(t, "error", 5) == 0;
+    if (needsDevice && cJSON_IsString(dv) && dv->valuestring[0] != '\0' &&
+        strcmp(dv->valuestring, DEVICE_ID) != 0) {
+        ESP_LOGI(TAG, "[ble] 信令属设备 %s（非本机 %s），忽略",
+                 dv->valuestring, DEVICE_ID);
+        cJSON_Delete(root);
+        return;
+    }
     if (strncmp(t, "talk_", 5) == 0) {
         talk.onSignalJson(json);  // talk_* 全转交（内部自解析状态和字幕）
     } else if (strcmp(t, "receipt") == 0) {
@@ -194,6 +209,24 @@ static void handleJsonSignal(const char* json) {
         } else {
             ui.showNote("WiFi 配置无效");
         }
+    } else if (strcmp(t, "set_name") == 0) {
+        // 设备显示名（ADR-064）：App 经 BLE 下发，存 NVS，hello/rec_start 随身带。
+        // 权威存储在设备端——App 只当设置入口，哑管道纪律不破（同 wifi_cfg 模式）
+        const cJSON* nm = cJSON_GetObjectItem(root, "name");
+        if (cJSON_IsString(nm) && nm->valuestring[0] != '\0') {
+            settings.setDevName(nm->valuestring);
+            settings.save();
+            char note[48];
+            snprintf(note, sizeof(note), "已改名「%.24s」✓", settings.devName());
+            ui.showNote(note);
+            ESP_LOGI(TAG, "[name] 设备显示名已存：%s", settings.devName());
+        } else if (cJSON_IsString(nm)) {
+            settings.setDevName("");   // 空串 = 清除，回退设备 ID 署名
+            settings.save();
+            ui.showNote("已恢复默认名 ✓");
+        } else {
+            ui.showNote("名字无效");
+        }
     }
     cJSON_Delete(root);
 }
@@ -234,9 +267,13 @@ static void wireButtons() {
         appState.setScreen(ScreenState::On);
     };
     btnTop.onPressDown(wake);
+    // 右下按下沿 = 立即开录（ADR-045 v2 定稿，用户拍板"马上就开始录，不允许
+    // 丢内容"）：40ms 电气防抖是唯一延迟，开头的字一个不丢。松手不结束——
+    // 点一下开始、说完再点一下结束，录音期间手可以离开（挂脖核心场景）。
+    // 再按一下的收尾判定（<300ms 录制时长 = 静默丢弃双击误触）在 Recorder::toggle。
     btnBottom.onPressDown([&wake] {
-        wake();  // 按下即录也依赖亮屏（录音 UI 必须可见）
-        recorder.pressDown();
+        wake();
+        recorder.toggle();
     });
 
     // 右上单击：亮屏 + 回主页（手表式交互：从卡片/设置/鸭子页一键回消息列表；
@@ -269,15 +306,9 @@ static void wireButtons() {
         }
     });
 
-    // 右下单击：亮屏唤醒（任意键单击先亮屏；长按后的松开不算单击，不冲突）
-    btnBottom.onSingleClick([] {
-        appState.notifyActivity();
-        appState.setScreen(ScreenState::On);
-    });
-
-    // 右下松开：交给 Recorder（确认窗内=误触撤销；宽限窗/锁定模式语义在它那）
-    btnBottom.onReleaseUp([] { recorder.releaseUp(); });
-    // talk 期间右下单击：不分配（打断由服务端 response.cancel 主导，protocol.md §6）
+    // 右下不再注册单击/双击/松开回调：按下沿即录（上文），收尾在"再按一下"
+    // 的按下沿。松手宽限/锁定模式已随按住说话退役（ADR-045 v2）
+    // talk 期间 toggle→start() 内部拦截并提示"实时对话中，无法录音"。
 }
 
 // ---------------------------------------------------------------- 主循环任务 ----
@@ -288,9 +319,10 @@ static void appTask(void*) {
         consumeBleEvents();   // BLE 帧泵的出水口：JSON 路由 / talk 音频转交
         btnTop.loop();
         btnBottom.loop();
-        recorder.tick();      // 确认窗 commit + 松手宽限收尾
+        recorder.tick();      // 确认窗 commit
         appState.tick();      // 息屏超时 / talk 连接超时等定时状态机
-        // 双击嘎嘎身 = 开始/结束录音（ADR-040：湿手操作，与长按右下等效）。
+        gatt.tick();          // 广播看门狗：未连接却不在广播 → 强制重启（今晚实锤的隐身 bug）
+        // 摇动 = 开始/结束录音（ADR-040 湿手操作；与右下单击同权，ADR-045）。
         // 录音中摇动 = 停（2026-09-25 用户实测：原条件忽略录音中摇动，
         // "要停的时候摇七八下都没用"——对称开合才是直觉）
         auto wakeEvt = wake.tick();
@@ -299,7 +331,9 @@ static void appTask(void*) {
         }
         power.tick(gatt.isConnected());  // 挂机深睡判定
         ui.tick();
-        vTaskDelay(pdMS_TO_TICKS(10));   // 10ms tick：按键防抖/双击窗口的时间分辨率
+        // 主循环节拍保持 10ms 不变：摇动判据按 ~11ms 采样标定（4 样本摆），
+        // 放宽会破坏阈值。省电靠 IMU Idle 档 + BLE 间隔 + 息屏，不靠任务减速
+        vTaskDelay(pdMS_TO_TICKS(10));   // 10ms tick：按键防抖/摇动采样分辨率
     }
 }
 
@@ -342,6 +376,9 @@ extern "C" void app_main() {
     ctx.wake     = &wake;
     ctx.power    = &power;
     ctx.kws      = &kws;
+    ctx.link     = &gatt;   // 默认 BLE 链路：泵任务高优先级可能先于链路选择
+                            // 运行（2026-09-26 启动崩溃根因），此处保证非空；
+                            // 家模式分支随后按需覆盖
 
     ESP_LOGI(TAG, "[heap] 起点 内部=%luB",
              (unsigned long)esp_get_free_internal_heap_size());
@@ -406,10 +443,16 @@ extern "C" void app_main() {
         link.onConnection([&](bool up) {
             ui.setBleConnected(up);  // 状态栏圆点 = 链路状态
             if (up) {
-                char buf[96];
-                snprintf(buf, sizeof(buf),
-                         "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\"}",
-                         DEVICE_ID, FW_VERSION);
+                char buf[160];
+                const char* nm = settings.devName();
+                if (nm[0] != '\0')
+                    snprintf(buf, sizeof(buf),
+                             "{\"type\":\"hello\",\"device\":\"%s\",\"name\":\"%s\",\"fw\":\"%s\"}",
+                             DEVICE_ID, nm, FW_VERSION);
+                else
+                    snprintf(buf, sizeof(buf),
+                             "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"%s\"}",
+                             DEVICE_ID, FW_VERSION);
                 link.sendJson(buf);
             } else if (talk.isActive()) {
                 ESP_LOGW(TAG, "[talk] 链路断连，会话本地结束");
@@ -457,6 +500,13 @@ extern "C" void app_main() {
     // 自动转向：持握角变化 → 转屏 + 左右箭头滚动动画
     wake.onRotation([](int deg) { ui.applyRotation(deg); });
     power.begin(&appState);
+    // 息屏省电联动（2026-09-26）：IMU 降到 Idle 档（94Hz 无陀螺，传感器电流
+    // 约减半）；亮屏恢复 Active。抬手/摇动检测在 94Hz 下照常工作（摆检测
+    // 粒度 11ms→10.7ms，阈值无感）
+    appState.onScreenChange([](ScreenState s) { imu.setPowerProfile(s == ScreenState::On); });
+    // 亮屏 → 全量重刷（ADR-054）：熄屏期间 Ui::tick 被闸（黑屏不渲染，
+    // 省掉"正在回复…"动效每 500ms 对睡面板的全量重绘），亮屏瞬间对齐
+    appState.onScreenChange([](ScreenState s) { if (s == ScreenState::On) ui.fullRefresh(); });
     kws.begin(&ctx);
     // ⚠️ 暂不开机自动恢复 KWS：esp_srmodel_init 的 mmap 路径真机仍崩
     // （boot loop 引信，ADR-037 备注），稳定前仅手动开（'W'/设置页）。

@@ -109,17 +109,30 @@ object KeepAlivePermission {
      * 所以主体链路是应用详情页（公开 API，必跳成功）；
      * 老版 ColorOS 的直达页能 resolve 就先试，失败自动落回。
      */
-    private fun openBatteryControl(activity: Activity) {
+    fun openBatteryControl(activity: Activity) {
+        openLegacyThenFallback(
+            activity,
+            "Tap 耗电管理 (Battery) → choose 完全允许后台行为",
+        )
+    }
+
+    /** 跳向自启动管理（同 selfstart 页封锁现状：直达页靠运气，应用详情兜底）。 */
+    fun openAutoStart(activity: Activity) {
+        openLegacyThenFallback(
+            activity,
+            "Find 自启动 (Auto-launch) → allow it for gaga ai",
+        )
+    }
+
+    /** 自启动管理页没有任何公开读取 API（ColorOS 不暴露开关状态），
+     *  状态只能让用户自己核对——入口与文案做到位即可。 */
+    private fun openLegacyThenFallback(activity: Activity, hint: String) {
         for (component in LEGACY_DIRECT_PAGES) {
             val intent = Intent().setComponent(component)
             if (activity.packageManager.resolveActivity(intent, 0) != null) {
                 try {
                     activity.startActivity(intent)
-                    Toast.makeText(
-                        activity,
-                        "Find gaga ai in the list, allow auto-start & background",
-                        Toast.LENGTH_LONG,
-                    ).show()
+                    Toast.makeText(activity, hint, Toast.LENGTH_LONG).show()
                     return
                 } catch (_: Exception) {
                     break // 被权限拦了，走应用详情页兜底
@@ -137,10 +150,6 @@ object KeepAlivePermission {
             // 极端 ROM 连应用详情页都屏蔽：退回系统设置首页
             activity.startActivity(Intent(Settings.ACTION_SETTINGS))
         }
-        Toast.makeText(
-            activity,
-            "Tap 耗电管理 (Battery) → choose 完全允许后台行为",
-            Toast.LENGTH_LONG,
-        ).show()
+        Toast.makeText(activity, hint, Toast.LENGTH_LONG).show()
     }
 }

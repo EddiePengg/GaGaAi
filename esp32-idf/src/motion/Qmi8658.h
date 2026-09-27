@@ -17,6 +17,11 @@ class Qmi8658 {
 public:
     bool begin(i2c_master_bus_handle_t bus);  // whoami 校验 + accel + tap 引擎配置
 
+    // 功耗档位（2026-09-26 省电）：Active = accel 500Hz + gyro 448Hz（调参/亮屏）；
+    // Idle = accel 94Hz + gyro 关（息屏挂脖——摇动判据只需加速度，500Hz 是
+    // Tap 引擎的历史遗留；94Hz 对 4 样本×11ms 摆检测绰绰有余，传感器电流约减半）
+    void setPowerProfile(bool active);
+
     // 读当前加速度（单位 g，屏幕法线 = Z）。false = I2C 失败
     bool readAccel(float* x, float* y, float* z);
 
@@ -45,6 +50,7 @@ private:
 
     i2c_master_dev_handle_t dev_ = nullptr;
     bool ready_ = false;
+    bool profileActive_ = true;   // 当前功耗档（true=Active）
 
     static constexpr uint8_t ADDR = 0x6B;   // QMI8658_L_SLAVE_ADDRESS
     // 寄存器表（QMI8658Constants.h）

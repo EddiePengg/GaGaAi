@@ -75,11 +75,14 @@ private:
     float lastX_ = 0, lastY_ = 0, lastZ_ = 1;
     bool   streamAccel_ = false;   // 'A' 原始数据流（调参期间抑制触发）
 
-    // ---- 自动转向（2026-09-25 用户需求）----
+    // ---- 自动转向（2026-09-26 v6.2）----
     float   ax_ = 0, ay_ = 0, az_ = 1;   // 最新三轴（每 tick 刷新）
+    float   flipIx_ = 0, flipIy_ = 0;    // 运动中积分的翻转角（gyro X/Y，度）
+    bool     burstActive_  = false;      // 息屏哨兵升起的 Active 精判窗
+    uint32_t burstUntilMs_ = 0;          // 精判窗截止
     int     rotCurDeg_     = 0;          // 当前已应用的旋转
-    int     rotCandDeg_    = 0;          // 候选旋转（滞回中）
-    uint32_t rotSteadySince_ = 0;        // 候选稳定起点（400ms 确认）
+    uint32_t rotSteadySince_ = 0;        // 静止确认起点（400ms）
+    uint32_t rotLastFlipMs_ = 0;         // 上次翻转落地时刻（冷却期）
     std::function<void(int)> onRotation_;
 
     // 参数（实测可调）：运动阈值 / 朝上判定 / 稳定窗口
@@ -91,6 +94,10 @@ private:
     // （2026-09-25 ⑨段数据：7 次拎起 3 次超窗放弃——1500ms 不够完成"拎起+看定"）
     static constexpr uint32_t FACEUP_HOLD_MS    = 250;   // 朝上稳定持续
     static constexpr uint32_t BASE_SAMPLE_MS    = 2000;  // 静息建基线时长
+    // 自动转向参数（v6.2 防抖三件套之外的两个阈值）
+    static constexpr uint32_t ROT_STEADY_MS   = 400;    // 静止确认时长
+    static constexpr float    ROT_STATIC_MIN  = 0.35f;  // 兜底判向死区（≈±20°，微摆过零不再翻）
+    static constexpr uint32_t ROT_COOLDOWN_MS = 3000;   // 翻转冷却（一次翻转后 3s 内不再翻）
 };
 
 }  // namespace gaga

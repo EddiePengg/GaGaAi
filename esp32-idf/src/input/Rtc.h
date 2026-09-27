@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // PCF85063 RTC（共享 I2C 总线 0x51，经 AXP2101 电池供电，断电走时）
@@ -25,5 +26,9 @@ bool rtcInit();
 bool rtcGetTime(RtcTime* out);
 // Unix 秒 → 写 RTC（服务端 ts 对时）；内部自己做历法换算
 bool rtcSetUnix(int64_t unixSec);
+// 设备开机毫秒 → 墙钟 "HH:MM"（卡片显示发送时刻用，2026-09-27）。
+// 返回 false = 从未对过时（显示端省略时间）。对时基准会随每次信令刷新，
+// 用软件基准换算而不是读芯片——要的是"那一刻"的时间，不是"现在"
+bool rtcHmAt(uint32_t uptimeMs, char* buf, size_t bufLen);
 
 }  // namespace gaga

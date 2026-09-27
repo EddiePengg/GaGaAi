@@ -70,6 +70,10 @@ public:
     const char* wifiSsid() const { return wifiSsid_; }
     const char* wifiPass() const { return wifiPass_; }
     void setWifi(const char* ssid, const char* pass);
+    // ---- 设备显示名（ADR-064）：群里署名用，App 经 BLE set_name 信令下发。
+    // 权威存储在设备（NVS）——App 只是设置入口，仍是哑管道。空 = 回退设备 ID
+    const char* devName() const { return devName_; }
+    void setDevName(const char* name);   // 引号/反斜杠/控制字符替换成空格（JSON 安全）
     void setMqtt(const char* host, int port);
     const char* mqttHost() const { return mqttHost_; }
     int mqttPort() const { return mqttPort_; }
@@ -96,6 +100,7 @@ private:
     int      talkProviderIdx_ = 0;  // 默认 volc（豆包）
     char     wifiSsid_[33] = {};
     char     wifiPass_[64] = {};
+    char     devName_[33] = {};   // 设备显示名（群里署名；空=用 DEVICE_ID）
     char     mqttHost_[64] = {};
     int      mqttPort_ = 1883;
     bool     wifiEnabled_ = false;

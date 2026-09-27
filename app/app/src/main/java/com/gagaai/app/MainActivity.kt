@@ -7,6 +7,8 @@ import android.app.Activity
 import android.app.PendingIntent
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.companion.AssociationRequest
 import android.companion.CompanionDeviceManager
@@ -58,6 +60,8 @@ class MainActivity : Activity(), BridgeState.Listener {
     private lateinit var btnClearLog: Button
     private lateinit var etBrokerHost: EditText
     private lateinit var etBrokerPort: EditText
+    private lateinit var etMqttUser: EditText
+    private lateinit var etMqttPass: EditText
     private lateinit var btnSaveBroker: Button
     private lateinit var btnToggleService: Button
     private lateinit var rowBattery: View
@@ -104,10 +108,26 @@ class MainActivity : Activity(), BridgeState.Listener {
         imgDuck = findViewById(R.id.imgDuck)
         cardTerminal = findViewById(R.id.cardTerminal)
         tvLog = findViewById(R.id.tvLog)
+        // 长按日志区 = 整段复制到剪贴板（排障时把日志带给开发者的唯一通道；
+        // 不用 setTextIsSelectable——选择手势和嵌套 ScrollView 滚动打架）
+        tvLog.setOnLongClickListener {
+            val text = tvLog.text.toString()
+            if (text.isBlank()) {
+                Toast.makeText(this, "日志还是空的", Toast.LENGTH_SHORT).show()
+            } else {
+                val cm = getSystemService(ClipboardManager::class.java)
+                cm.setPrimaryClip(ClipData.newPlainText("gaga log", text))
+                val lines = text.count { it == '\n' } + 1
+                Toast.makeText(this, "日志已复制（$lines 行）", Toast.LENGTH_SHORT).show()
+            }
+            true
+        }
         logScroll = findViewById(R.id.logScroll)
         btnClearLog = findViewById(R.id.btnClearLog)
         etBrokerHost = findViewById(R.id.etBrokerHost)
         etBrokerPort = findViewById(R.id.etBrokerPort)
+        etMqttUser = findViewById(R.id.etMqttUser)
+        etMqttPass = findViewById(R.id.etMqttPass)
         btnSaveBroker = findViewById(R.id.btnSaveBroker)
         btnToggleService = findViewById(R.id.btnToggleService)
         rowBattery = findViewById(R.id.rowBattery)
@@ -125,6 +145,8 @@ class MainActivity : Activity(), BridgeState.Listener {
         Prefs.ensureLoaded(this)
         etBrokerHost.setText(Prefs.brokerHost)
         etBrokerPort.setText(Prefs.brokerPort.toString())
+        etMqttUser.setText(Prefs.mqttUser)
+        etMqttPass.setText(Prefs.mqttPass)
 
         // 整体状态徽章：点击出修复指引
         tvOverall.setOnClickListener { showFixGuide() }
@@ -135,7 +157,9 @@ class MainActivity : Activity(), BridgeState.Listener {
         btnSaveBroker.setOnClickListener {
             val host = etBrokerHost.text.toString().trim()
             val port = etBrokerPort.text.toString().toIntOrNull() ?: Prefs.DEFAULT_PORT
-            Prefs.saveBroker(this, host, port)
+            val user = etMqttUser.text.toString()
+            val pass = etMqttPass.text.toString()
+            Prefs.saveBroker(this, host, port, user, pass)
             Toast.makeText(this, "Saved $host:${Prefs.brokerPort}", Toast.LENGTH_SHORT).show()
             serverEditArea.visibility = View.GONE  // 保存即收起，页面回到状态展示
             if (BridgeState.current().serviceRunning) {
@@ -173,28 +197,7 @@ class MainActivity : Activity(), BridgeState.Listener {
         }
 
         // 保活①：电池白名单（Doze/ColorOS 后台管控的第一道豁免）
-        rowBattery.setOnClickListener {
-            val pm = getSystemService(PowerManager::class.java)
-            if (pm.isIgnoringBatteryOptimizations(packageName)) {
-                Toast.makeText(this, "Already whitelisted", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            try {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:$packageName"),
-                    )
-                )
-            } catch (_: Exception) {
-                // 部分 ROM 屏蔽该动作：退回系统电池优化列表页
-                try {
-                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                } catch (_: Exception) {
-                    Toast.makeText(this, "Battery settings could not be opened — please set it to unrestricted manually", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
+        rowBattery.setOnClickListener { requestBatteryWhitelist() }
 
         // 保活②/伴生：未配对时点击直接配对；已配对时弹管理菜单（重新配对/取消配对）
         rowCompanion.setOnClickListener {
@@ -272,6 +275,20 @@ class MainActivity : Activity(), BridgeState.Listener {
             Prefs.setShowTerminal(this, checked)
             applyTerminalVisibility()
         }
+        // 电池白名单状态实时显示（打开对话框的一瞬读一次）
+        val whitelisted =
+            getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+        view.findViewById<TextView>(R.id.tvBatteryState).text =
+            if (whitelisted) "On ✓ — Doze & background limits waived"
+            else "Off — tap to allow"
+        // 与主界面"电池白名单"行同一路径：一键弹系统豁免框
+        view.findViewById<View>(R.id.rowBatteryWhitelist).setOnClickListener {
+            requestBatteryWhitelist()
+        }
+        // 自启动管理：ColorOS 不暴露开关状态，只给直达入口 + 手动核对文案
+        view.findViewById<View>(R.id.rowAutoStart).setOnClickListener {
+            KeepAlivePermission.openAutoStart(this)
+        }
         view.findViewById<TextView>(R.id.tvSystemSettings).setOnClickListener {
             try {
                 startActivity(
@@ -290,10 +307,42 @@ class MainActivity : Activity(), BridgeState.Listener {
             .show()
     }
 
+    /** 电池白名单一键豁免（主界面行 + 设置对话框共用）。 */
+    private fun requestBatteryWhitelist() {
+        val pm = getSystemService(PowerManager::class.java)
+        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+            Toast.makeText(this, "Already whitelisted", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName"),
+                )
+            )
+        } catch (_: Exception) {
+            // 部分 ROM 屏蔽该动作：退回系统电池优化列表页
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Exception) {
+                Toast.makeText(this, "Battery settings could not be opened — please set it to unrestricted manually", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         BridgeState.addListener(this)
         renderPairStatus()
+        // 回前台踢一脚重连：后台扫描被 ColorOS 限流是"卡在扫描中需手动
+        // Stop/Start"的根因（2026-09-26）。服务在跑则重建扫描会话，
+        // 没跑则顺便把它拉起
+        startService(
+            Intent(this, com.gagaai.app.service.GagaService::class.java).setAction(
+                com.gagaai.app.companion.GagaCompanionService.ACTION_KICK_RECONNECT
+            )
+        )
         val whitelisted =
             getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
         batteryState.text = if (whitelisted) "On ✓" else "Off ›"
@@ -512,18 +561,20 @@ class MainActivity : Activity(), BridgeState.Listener {
     private fun requestAssociation(cdm: CompanionDeviceManager) {
         // 必须带 BLE 过滤器：空 filter 的选择框只列系统已配对的经典蓝牙设备、
         // 不做实时扫描，嘎嘎（未配对的 BLE 设备）永远不会出现；带前缀过滤后
-        // 选择框才进入扫描模式，正在广播的 GAGA- 才会被发现
-        val request = if (Build.VERSION.SDK_INT >= 31) {
-            AssociationRequest.Builder()
-                .addDeviceFilter(
-                    android.companion.BluetoothDeviceFilter.Builder()
-                        .setNamePattern(java.util.regex.Pattern.compile("GAGA-.*"))
-                        .build()
-                )
-                .build()
-        } else {
-            AssociationRequest.Builder().build()
+        // 选择框才进入扫描模式，正在广播的 GAGA- 才会被发现。
+        // API 33+ 声明手表 profile：系统按手表类配套 App 对待——后台运行/
+        // 后台起前台服务的豁免直接授予（保命等级质变），manifest 需同时声明
+        // REQUEST_COMPANION_PROFILE_WATCH 权限
+        val builder = AssociationRequest.Builder()
+            .addDeviceFilter(
+                android.companion.BluetoothDeviceFilter.Builder()
+                    .setNamePattern(java.util.regex.Pattern.compile("GAGA-.*"))
+                    .build()
+            )
+        if (Build.VERSION.SDK_INT >= 33) {
+            builder.setDeviceProfile(AssociationRequest.DEVICE_PROFILE_WATCH)
         }
+        val request = builder.build()
         try {
             cdm.associate(request, object : CompanionDeviceManager.Callback() {
                 override fun onDeviceFound(chooserIntent: IntentSender) {

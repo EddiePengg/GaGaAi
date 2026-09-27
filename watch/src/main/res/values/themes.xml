@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 手表圆屏主题：深底更省电（AMOLED 全黑像素不耗电），
+         按钮鸭黄高对比，一米外可读 -->
+    <style name="Theme.GagaWatch" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorAccent">@color/duck_yellow</item>
+        <item name="android:textColorPrimary">@color/bg_warm</item>
+        <item name="android:textColorSecondary">@color/ink_soft</item>
+    </style>
+</resources>

@@ -3,6 +3,7 @@
 #include "bsp/esp-bsp.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
+#include <cstdio>
 
 #include "compat.h"
 
@@ -27,6 +28,7 @@ static uint32_t s_baseMs    = 0;   // 对时时刻的 millis
 static inline uint8_t bcd2dec(uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); }
 static inline uint8_t dec2bcd(uint8_t v) { return ((v / 10) << 4) | (v % 10); }
 static void unixToCivil(int64_t s, RtcTime* t);
+static int64_t civilToUnix(const RtcTime* t);
 
 // I2C 连续读/写 RTC 寄存器（首字节是寄存器地址；50ms 超时，调用方持锁）
 static bool rtcReadRegs(uint8_t reg, uint8_t* buf, size_t len) {
@@ -70,6 +72,14 @@ bool rtcInit() {
         ESP_LOGI(TAG, "RTC %s %04d-%02d-%02d %02d:%02d:%02d",
                  t.valid ? "走时中" : "未校时(OS)",
                  t.year, t.month, t.day, t.hour, t.minute, t.second);
+        if (t.valid && s_baseUnix == 0) {
+            // 播种软件锚点（2026-09-27）：rtcHmAt（卡片时间）只认软件基准，
+            // 不播种的话重启后第一张卡要等第一条心跳才有时间
+            s_baseUnix = civilToUnix(&t);
+            s_baseMs   = millis();
+            ESP_LOGI(TAG, "软件锚点已从硬件 RTC 播种 unix=%lld",
+                     static_cast<long long>(s_baseUnix));
+        }
     }
     return true;
 }
@@ -104,6 +114,10 @@ bool rtcGetTime(RtcTime* out) {
 
 // Unix 秒 → 年月日时分秒（civil_from_days 算法，1970 纪元，无闰秒）
 static void unixToCivil(int64_t s, RtcTime* t) {
+    // 时区（2026-09-26 修复）：服务器 envelope 的 ts 是 Unix 秒 = UTC。
+    // 此前直接换算，东八区显示慢 8 小时——"每次时间都不对"的根因。
+    // 写死 UTC+8：本产品用户群在中国，出海时再做成可配置。
+    s += 8 * 3600;
     // 先把"天"和"当天剩下的秒"拆开
     int64_t days = s / 86400;
     int64_t rem  = s % 86400;
@@ -124,6 +138,22 @@ static void unixToCivil(int64_t s, RtcTime* t) {
     t->year  = static_cast<int>(y + (m <= 2 ? 1 : 0));
     t->month = static_cast<int>(m);
     t->day   = static_cast<int>(d);
+}
+
+// 年月日时分秒 → Unix 秒（Howard Hinnant days_from_civil，unixToCivil 的逆）。
+// 用途：开机从硬件 RTC 播种软件基准（否则重启后第一张消息卡的时间要等
+// 第一条心跳才显示——状态栏读芯片所以是对的，卡片却没时间，割裂）
+static int64_t civilToUnix(const RtcTime* t) {
+    int64_t y = t->year;
+    const int64_t m = t->month;
+    const int64_t d = t->day;
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const int64_t yoe = y - era * 400;                     // [0, 399]
+    const int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const int64_t days = era * 146097 + doe - 719468;
+    return days * 86400 + t->hour * 3600 + t->minute * 60 + t->second;
 }
 
 // 对时：软件基准必更（millis 推算的起点），有硬件 RTC 再把芯片也写了
@@ -155,6 +185,21 @@ bool rtcSetUnix(int64_t unixSec) {
                  t.year, t.month, t.day, t.hour, t.minute, t.second);
     }
     return ok;
+}
+
+// 设备开机毫秒 → 墙钟 "HH:MM"（卡片发送时刻显示，2026-09-27）。
+// 用软件对时基准换算（不是读芯片——要的是"那一刻"）：该时刻 Unix =
+// 基准 Unix +（该时刻 uptime - 基准 uptime）/1000。有符号差容忍对时
+// 在卡片创建之后发生（时钟被校正过的历史卡也能换算），millis 回绕由
+// uint32 减法自然处理。从未对时返回 false，调用端省略时间。
+bool rtcHmAt(uint32_t uptimeMs, char* buf, size_t bufLen) {
+    if (s_baseUnix == 0) return false;
+    const int32_t dt = static_cast<int32_t>(uptimeMs - s_baseMs);
+    const int64_t unixSec = s_baseUnix + dt / 1000;
+    RtcTime t{};
+    unixToCivil(unixSec, &t);
+    snprintf(buf, bufLen, "%02d:%02d", t.hour, t.minute);
+    return true;
 }
 
 }  // namespace gaga

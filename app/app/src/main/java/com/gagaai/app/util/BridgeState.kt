@@ -2,6 +2,7 @@ package com.gagaai.app.util
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -11,10 +12,14 @@ import java.util.concurrent.CopyOnWriteArrayList
  * 服务与 Activity 之间的轻量状态总线（同进程）。
  * 日志存环形缓冲（最近 [MAX_LOG_LINES] 条），UI 任何时候 attach 都能回放全量，
  * Activity 重建（旋转/切后台）日志不丢。所有回调都 post 到主线程。
+ * 每条日志同时镜像到 logcat（tag=gaga.bridge，v0.4.5）：业务日志原本只活在
+ * App 内存里，adb logcat 看不到——排障时开发者没法隔空读终端，镜像后
+ * `adb logcat -s gaga.bridge` 即得全量（App 的系统级日志通道由此打通）。
  */
 object BridgeState {
 
     const val MAX_LOG_LINES = 200
+    private const val TAG = "gaga.bridge"  // logcat 镜像标签（adb logcat -s gaga.bridge）
 
     data class Snapshot(
         val serviceRunning: Boolean = false,
@@ -66,6 +71,7 @@ object BridgeState {
     }
 
     fun log(message: String) {
+        Log.i(TAG, message)  // logcat 镜像（v0.4.5）：adb 排障通道，见类注释
         val entry = Entry(timeFormat.format(Date()), message)
         val logs: List<String>
         synchronized(lock) {
@@ -101,6 +107,7 @@ object BridgeState {
      * 下一次同 key 的 logProgress 会另起新行，而不是覆盖这条结果。
      */
     fun logProgressFinal(key: String, message: String) {
+        Log.i(TAG, message)  // logcat 镜像（v0.4.5）：进度行只镜像定稿，中间刷新免刷屏
         val logs: List<String>
         synchronized(lock) {
             val last = logBuffer.lastOrNull()

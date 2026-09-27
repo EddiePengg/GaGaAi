@@ -50,13 +50,84 @@
         android:layout_marginBottom="4dp"
         android:background="@color/card_stroke" />
 
+    <!-- 保活入口组（ADR-024）：ColorOS 上"耗电管理→完全允许后台行为"与
+         "自启动"是两套独立管控，缺一都可能被杀或无法拉活——所以这里
+         两个直达入口 + 文案提醒并列，而不只是跳一个应用详情页 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="Keep alive — both required"
+        android:textColor="@color/ink"
+        android:textSize="16sp" />
+
+    <LinearLayout
+        android:id="@+id/rowBatteryWhitelist"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:background="?android:attr/selectableItemBackground"
+        android:orientation="vertical"
+        android:padding="10dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🔋 Battery whitelist"
+            android:textColor="@color/duck_yellow_dark"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/tvBatteryState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Off — tap to allow"
+            android:textColor="@color/ink_soft"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/rowAutoStart"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?android:attr/selectableItemBackground"
+        android:orientation="vertical"
+        android:padding="10dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🚀 Auto-start (自启动)"
+            android:textColor="@color/duck_yellow_dark"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Allow gaga ai to launch itself — no status API, check it manually"
+            android:textColor="@color/ink_soft"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:background="@color/card_stroke"
+        android:padding="10dp"
+        android:text="⚠ 两处都要开启，缺一不可：\n① 耗电管理 → 完全允许后台行为\n② 自启动管理 → 允许 gaga ai\n只开一个，ColorOS 照样杀后台或拦住自愈拉活。"
+        android:textColor="@color/ink_soft"
+        android:textSize="12sp" />
+
     <TextView
         android:id="@+id/tvSystemSettings"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="?android:attr/selectableItemBackground"
         android:padding="10dp"
-        android:text="🛠 System permissions (battery / auto-start)"
-        android:textColor="@color/duck_yellow_dark"
-        android:textSize="15sp" />
+        android:text="🛠 All app system settings"
+        android:textColor="@color/ink_soft"
+        android:textSize="13sp" />
 </LinearLayout>

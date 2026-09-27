@@ -55,12 +55,29 @@ def main() -> None:
                             parent_id: str = "", root_id: str = "") -> None:
         if talk_bridge is not None and talk_bridge.on_channel_reply(
                 msg_id, parent_id, root_id, text):
-            return  # 命中工具回流：已插入实时会话
-        # reply_to = Hermes 引用的那条鸭子消息 id：设备按它精确配对消息卡
-        # （2026-09-25 用户报"回复加错卡片"——FIFO 盲配对在多卡等待时错位）
-        reply_to = parent_id or root_id
-        extra = {"reply_to": reply_to} if reply_to else {}
-        bridge.publish_json({"type": "reply", "text": flatten_markdown(text), **extra})
+            return  # 命中工具回流：已插入实时会话（其台账在先，不受下述过滤影响）
+        # 会话圈过滤（2026-09-26 用户拍板）：只转发"回复嘎嘎消息"的回流。
+        # Hermes 在群里回别人的话 / 主动发言不再打扰设备（此前照发不误，
+        # 设备端 FIFO 兜底还会把它错贴到等待卡上响一声）。
+        # 无引用（parent/root 皆空）的 Hermes 消息同样丢弃——"忘记打回复
+        # 标签"的补偿走用户规划的"强制 AI 末尾带 ID"方案；丢弃有日志可观察。
+        if not (channel.isMine(parent_id) or channel.isMine(root_id)):
+            log.info("非嘎嘎会话消息（parent=%s root=%s），忽略: %s",
+                     parent_id or "-", root_id or "-", text[:40])
+            return
+        # reply_to 优先取"确属嘎嘎"的那个：深层回复链 parent 指向 Hermes
+        # 中间消息时，root 才是设备认识的（receipt 存过 msgId）
+        reply_to = parent_id if channel.isMine(parent_id) else root_id
+        # 设备盖戳（2026-09-27 补完 ADR-057 的收尾半步）：reply 经 msg_id→device
+        # 映射找回归属。无戳 reply 广播能到、丢了没人补（熄屏僵尸窗实测：
+        # receipt 全到 reply 全灭的根源）；带戳后进按设备台账，设备端也只认
+        # 自己的（多设备隔离）。
+        rdev = session.device_for_msg(reply_to)
+        reply_msg = {"type": "reply", "text": flatten_markdown(text),
+                     "reply_to": reply_to}
+        if rdev:
+            reply_msg["device"] = rdev
+        bridge.publish_json(reply_msg)
 
     try:
         channel = create_channel(cfg, _on_channel_message)

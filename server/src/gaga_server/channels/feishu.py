@@ -18,10 +18,13 @@ chat_id 解析：FEISHU_CHAT_ID 配了用配置；没配则自动发现——只
 
 入向过滤链（防自环/串扰，按序）：
 1. msg_type 非 text/post → 跳过（system/图片/卡片等）；
-2. sender 是自己（app_id 相同）或文本"🦆"前缀 → 上行回声，忽略；
+2. sender 是自己（app_id 相同）→ 上行回声，忽略（2026-09-27 起不再看文本前缀：Hermes 回复也带 🦆 开头，前缀判据误杀过全部 AI 回复）；
 3. FEISHU_REPLY_SENDER 配置（ou_ 用户 / cli_ 应用均可）：非指定发送者 → 忽略；
    未配置时默认只认**应用类**发送者（sender_type=app，即群里的 bot 回复，
-   如 Hermes；人的闲聊不会点亮设备消息卡）。
+   如 Hermes；人的闲聊不会点亮设备消息卡）；
+4. 会话圈（isMine，2026-09-26）：parent/root 引用必须指向嘎嘎自己发出的
+   消息（send_text 记账）——Hermes 回别人的话不进设备。路由闸门在
+   main._on_channel_message（工具回流豁免在前）。
 启动时先拉一轮只记 id 不触发回调（不把历史消息当回复重放）。
 """
 from __future__ import annotations
@@ -40,7 +43,8 @@ from .base import Channel, ChannelError
 
 log = logging.getLogger("gaga_server.channels.feishu")
 
-_UPLINK_PREFIX = "🦆"  # 上行文本固定前缀（pipeline.deliver_text）——回声识别
+# 上行文本带 "🦆" 前缀（pipeline.deliver_text）但**不再**用于回声判定：
+# Hermes 的回复同样以 🦆 开头（2026-09-27 铁证），前缀判据误杀全部 AI 回复。
 
 
 class FeishuChannel(Channel):
@@ -57,6 +61,11 @@ class FeishuChannel(Channel):
                      .app_secret(cfg.feishu_app_secret).build())
         self._seen: set[str] = set()
         self._poll_thread: threading.Thread | None = None
+        # 嘎嘎会话圈（2026-09-26 用户拍板）：send_text 发出的每条消息 id 都记
+        # 账（语音上行 + talk 工具指令都是嘎嘎发起的）。入向路由只认
+        # parent/root 命中这本账的回复——Hermes 回别人的话不再打扰设备。
+        self._mine: dict[str, float] = {}
+        self._mine_lock = threading.Lock()
 
     # ---- 生命周期 ----
 
@@ -105,7 +114,34 @@ class FeishuChannel(Channel):
         if not resp.success():
             raise ChannelError(f"飞书发送失败 code={resp.code} msg={resp.msg}"
                                "（缺 im:message:send_as_bot 权限？机器人不在群里？）")
-        return resp.data.message_id or ""
+        msg_id = resp.data.message_id or ""
+        self._rememberMine(msg_id)
+        return msg_id
+
+    # ---- 嘎嘎会话圈账本 ----
+
+    def _rememberMine(self, msg_id: str) -> None:
+        """发出去的消息 id 记账（2 小时 / 200 条滚动裁剪，防泄漏）。"""
+        if not msg_id:
+            return
+        now = time.time()
+        with self._mine_lock:
+            self._mine[msg_id] = now
+            if len(self._mine) > 200:
+                cutoff = now - 2 * 3600
+                self._mine = {k: v for k, v in self._mine.items()
+                              if v >= cutoff} or self._mine
+                # 裁不动（2h 内超 200 条）就丢最旧的一半，量级远超实际
+                if len(self._mine) > 200:
+                    keep = sorted(self._mine.items(), key=lambda kv: kv[1])[-100:]
+                    self._mine = dict(keep)
+
+    def isMine(self, msg_id: str) -> bool:
+        """这条消息 id 是不是嘎嘎（经 send_text）发出去的。"""
+        if not msg_id:
+            return False
+        with self._mine_lock:
+            return msg_id in self._mine
 
     # ---- 入向：轮询 ----
 
@@ -152,7 +188,12 @@ class FeishuChannel(Channel):
         is_self_app = (sender.sender_type == "app"
                        and sender_id == self.cfg.feishu_app_id)
         text = self._extract_text(m)
-        if is_self_app or text.startswith(_UPLINK_PREFIX):
+        # 回声判定只用 sender（2026-09-27 铁证修复）：Hermes 的回复文本也以
+        # "🦆"开头（它自己的行文习惯），旧版"前缀=回声"的检查把每一条 AI
+        # 回复都当上行回声静默吃掉——用户"卡片永远正在回复"一天多的根因。
+        # 自己发的上行/工具指令都走本 app 凭证（send_text），sender 判据
+        # 精确且无歧义，前缀检查删除。
+        if is_self_app:
             return  # 自己发出的上行回声
         if self.cfg.feishu_reply_sender:
             if sender_id != self.cfg.feishu_reply_sender:

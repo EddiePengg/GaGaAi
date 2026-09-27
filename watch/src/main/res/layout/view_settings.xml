@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ④ 设置页：broker 配置从"启动弹窗"改为常规项
+     尺寸约束：233×233dp 圆屏，34dp 横向内边距 + 紧行距，ScrollView 兜底 -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:fadeScrollbars="false"
+    android:paddingStart="34dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="34dp"
+    android:scrollbars="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:text="⚙ 设置"
+            android:textColor="@color/bg_warm"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView style="@style/SectionHeader" android:text="连接" />
+
+        <TextView style="@style/FieldLabel" android:text="服务器 host:port" />
+
+        <EditText
+            android:id="@+id/etBroker"
+            style="@style/FieldInput"
+            android:hint="192.168.1.100:1883"
+            android:inputType="text" />
+
+        <TextView style="@style/FieldLabel" android:text="MQTT 用户名（留空=匿名）" />
+
+        <EditText
+            android:id="@+id/etMqttUser"
+            style="@style/FieldInput"
+            android:hint="gaga"
+            android:inputType="text" />
+
+        <TextView style="@style/FieldLabel" android:text="MQTT 密码" />
+
+        <EditText
+            android:id="@+id/etMqttPass"
+            style="@style/FieldInput"
+            android:hint="（无鉴权 broker 留空）"
+            android:inputType="textPassword" />
+
+        <TextView style="@style/FieldLabel" android:text="设备 ID" />
+
+        <EditText
+            android:id="@+id/etDeviceId"
+            style="@style/FieldInput"
+            android:hint="watch-01"
+            android:inputType="text" />
+
+        <TextView style="@style/SectionHeader" android:text="声音" />
+
+        <TextView
+            android:id="@+id/btnSoundToggle"
+            style="@style/ToggleRow"
+            android:text="提示音      [ 开 ]" />
+
+        <TextView style="@style/SectionHeader" android:text="交互" />
+
+        <TextView
+            android:id="@+id/btnAutoRec"
+            style="@style/ToggleRow"
+            android:text="打开即录音  [ 开 ]" />
+
+        <TextView
+            android:id="@+id/btnShakeRec"
+            style="@style/ToggleRow"
+            android:text="晃两下手腕  [ 开 ]" />
+
+        <TextView
+            android:id="@+id/btnKeepMsg"
+            style="@style/ToggleRow"
+            android:text="消息保留    [ 50 条 ]" />
+
+        <TextView style="@style/SectionHeader" android:text="网络诊断" />
+
+        <TextView
+            android:id="@+id/tvLocalIps"
+            style="@style/ToggleRow"
+            android:text="本机 IP  …读取中"
+            android:textColor="@color/terminal_text" />
+
+        <TextView
+            android:id="@+id/btnTestConn"
+            style="@style/ToggleRow"
+            android:text="▶ 测试连接 broker"
+            android:textColor="@color/duck_yellow" />
+
+        <TextView
+            android:id="@+id/tvTestResult"
+            style="@style/ToggleRow"
+            android:text=""
+            android:textColor="@color/terminal_text" />
+
+        <TextView style="@style/SectionHeader" android:text="关于" />
+
+        <TextView
+            android:id="@+id/tvVersion"
+            style="@style/ToggleRow"
+            android:text="版本 …" />
+
+        <TextView
+            android:id="@+id/btnClearAll"
+            style="@style/ToggleRow"
+            android:text="清除全部配置"
+            android:textColor="@color/stop_red" />
+
+        <TextView
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_btn_primary"
+            android:gravity="center"
+            android:padding="10dp"
+            android:text="保存"
+            android:textColor="@color/ink"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
+
+    </LinearLayout>
+</ScrollView>

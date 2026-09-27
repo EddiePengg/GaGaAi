@@ -37,64 +37,81 @@ Wake::Event Wake::tick() {
     if (imu_ == nullptr || !imu_->ready() || app_ == nullptr) return Event::None;
     const uint32_t now = millis();
 
-    // ---- 摇动检测：不受节流限制，每 10ms 采样（ADR-040，v2 算法见下）----
-    // 'A' 数据流开着时：每样本打一行原始值（时间,模长,偏离,xyz），
-    // 且触发只记 would-fire 标记不动作——离线分析阈值，不被嘎嘎声污染数据。
+    // ---- 摇动检测：不受节流限制，每 10ms 采样 ----
+    // 水平分量判据（2026-09-26 用户洞察）：重力方向由低通滤波估计，
+    // 运动加速度分解为"平行重力"（竖直弹跳/跑步）和"垂直重力"（水平摇动）。
+    // 只有垂直分量参与摆检测——竖直弹跳被天然过滤。
+    // 'A' 数据流开着时照常打原始值行。
     float ax, ay, az;
     if (imu_->readAccel(&ax, &ay, &az)) {
         const float mag = sqrtf(ax * ax + ay * ay + az * az);
         const float dev = mag > 1.0f ? mag - 1.0f : 1.0f - mag;
         ax_ = ax; ay_ = ay; az_ = az;
+        // 重力低通估计（alpha=0.06，约 0.16s 时间常数 @10ms tick）
+        static float gLpX = 0, gLpY = 0, gLpZ = 1;
+        gLpX += 0.06f * (ax - gLpX);
+        gLpY += 0.06f * (ay - gLpY);
+        gLpZ += 0.06f * (az - gLpZ);
+        const float gMag = sqrtf(gLpX*gLpX + gLpY*gLpY + gLpZ*gLpZ);
+        // 水平分量 = 动态加速度去掉平行重力的部分
+        float hDev = 0;
+        if (gMag > 0.2f) {
+            const float dx = ax - gLpX, dy = ay - gLpY, dz = az - gLpZ;
+            const float dMag = sqrtf(dx*dx + dy*dy + dz*dz);
+            const float par = (dx*gLpX + dy*gLpY + dz*gLpZ) / gMag;
+            hDev = sqrtf(fmaxf(0, dMag*dMag - par*par));
+        }
+        // 哨兵（息屏时粗摆升档）
         tickRotation(dev, now);
         if (streamAccel_) {
-            float gx, gy, gz;
-            const bool hasG = imu_->readGyro(&gx, &gy, &gz);
+            float gxd, gyd, gzd;
+            const bool hasG = imu_->readGyro(&gxd, &gyd, &gzd);
             ESP_LOGI(TAG, "[A],%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",
                      (unsigned long)now, mag, dev, ax, ay, az,
-                     hasG ? gx : 0.0f, hasG ? gy : 0.0f, hasG ? gz : 0.0f);
+                     hasG ? gxd : 0.0f, hasG ? gyd : 0.0f, hasG ? gzd : 0.0f);
         }
         static int streak = 0;           // 当前连续超阈样本数（摆长）
-        static float streakMinMag = 99;  // 本摆内最低 |a|（自由落体甄别）
-        static int swings = 0;           // 本手势累计摆数（2 摆 = 摇一下）
-        static uint32_t lastSwingMs = 0; // 最近一摆完成时刻
-        static bool   gesturePending = false;  // 摆数达标，等"停手"确认
-        static uint32_t pendingSinceMs = 0;    // 手势完成时刻
-        static uint32_t lastFireMs = 0;        // 上次触发（冷却期）
-        // 设置页"摇动录音"关 = 不触发；但 'A' 流开着时照常评估并打 would-fire
-        // （采集数据不被开关状态绑架）。只闸动作，不能 return——
-        // 后面的抬手亮屏检测还得跑。
+        static float streakMinMag = 99;
+        static float streakPeak = 0;     // 本摆内最高 |a|
+        static float swingPeak = 0;      // 本手势窗口内最大摆峰
+        static float firstPeak = 0;      // 首摆峰值（持续度闸门）
+        static int swings = 0;
+        static uint32_t lastSwingMs = 0;
+        static bool   gesturePending = false;
+        static uint32_t pendingSinceMs = 0, lastFireMs = 0;
         const bool shakeArmed = (settings_ == nullptr || settings_->shakeEnabled());
         if (shakeArmed || streamAccel_) {
-            // 摇动检测 v4：手势会话制（2026-09-25 用户反馈"摇一下就发/嘎嘎
-            // 两声瞬间开关"——v3.1 摆数门槛会在手势中途触发且无冷却）。
-            //   摆 = dev>0.6g 连续 ≥3 样本，摆内 |a|>0.35g；2 摆 = 摇一下。
-            //   手势 = 1s 内 ≥4 摆（完整两下）→ 进入"待停手确认"。
-            //   触发 = 手势完成 + 停手静止 ≥500ms（摇的过程永不中途触发，
-            //   也根治"连续摇 = 开关同瞬"）；触发后冷却 2s，同一套余动不再
-            //   二次触发。挂脖持续摇晃因无 500ms 静止间隙不会误判收尾。
-            if (dev > 0.6f) {
+            // v5 判据：水平分量 >0.6g 连续 ≥3 样本 = 一个摆（摆内 |a|>0.35）
+            // 手势 = 1s 内 ≥4 摆、末摆 ≥0.45×首摆、停手 500ms 确认 → 触发
+            // 竖直弹跳（跑步/跳）水平分量弱 → 天然过滤；斜摇/水平摇 → 通过
+            if (hDev > 0.6f) {
                 streak++;
                 if (mag < streakMinMag) streakMinMag = mag;
+                if (mag > streakPeak) streakPeak = mag;
             } else {
                 if (streak >= 3 && streakMinMag > 0.35f && !gesturePending) {
                     if (swings > 0 && now - lastSwingMs > 500) {
-                        swings = 0;   // 断档太久：上一场手势作废
+                        swings = 0; firstPeak = 0; swingPeak = 0;
                     }
                     swings++;
+                    if (swings == 1) firstPeak = streakPeak;
+                    if (streakPeak > swingPeak) swingPeak = streakPeak;
                     lastSwingMs = now;
-                    if (swings >= 4) {
+                    if (swings >= 4 && swingPeak >= 2.5f &&
+                        streakPeak >= 0.45f * firstPeak) {
                         gesturePending = true;
                         pendingSinceMs = now;
                     }
                 }
                 streak = 0;
                 streakMinMag = 99;
+                streakPeak = 0;
             }
-            // 收尾：待确认 + 停手静止 ≥500ms + 冷却已过 → 触发
+            // 收尾 + 冷却
             if (gesturePending && dev < 0.2f &&
                 now - lastSwingMs >= 500 && now - lastFireMs >= 2000) {
                 gesturePending = false;
-                swings = 0;
+                swings = 0; firstPeak = 0; swingPeak = 0;
                 lastFireMs = now;
                 if (streamAccel_) {
                     ESP_LOGI(TAG, "[A] !! would-fire t=%lu（流模式：抑制触发）",
@@ -106,17 +123,18 @@ Wake::Event Wake::tick() {
                     return Event::Tap;
                 }
             }
-            // 超时作废：手势完成后 2.5s 还没停手（一直在摇）→ 作废重计
             if (gesturePending && now - pendingSinceMs > 2500) {
                 gesturePending = false;
-                swings = 0;
+                swings = 0; firstPeak = 0; swingPeak = 0;
             }
         }
     }
 
     // ---- 节流检查（其余功能不需要每 10ms 都跑）----
     const bool screenOn = (app_->screen() == ScreenState::On);
-    const uint32_t period = screenOn ? 200 : 50;
+    // 摇动检测不受此节流管（上面每 tick 都跑）；这里管抬手/姿态：
+    // 息屏 40ms（94Hz Idle 档下采样已到位）、亮屏 200ms（只查姿态）
+    const uint32_t period = screenOn ? 200 : 40;
     if (lastTickMs_ != 0 && (now - lastTickMs_) < period) return Event::None;
     lastTickMs_ = now;
 
@@ -146,38 +164,72 @@ Wake::Event Wake::tick() {
     return Event::None;
 }
 
-// 自动转向 v5.1：X 轴符号判向（极性按用户实测"完全反了"翻转，2026-09-25）。
-// 定轴依据：标注双姿势数据——自然轻拿（70°）与竖直（90°+）面内重力方向
-// 几乎相同（atan2 ≈175°/181°，即 ax<0），唯一稳定特征 = ax 符号。
-// 规则：ax < 0（自然观看）→ 翻转 180°；ax ≥ 0（上下颠倒拿）→ 0°。
-// 此前 ay 符号规则两桶均值仅 ±0.06（σ0.15）= 读噪声随机翻转，废弃。
-// 平时（亮屏+静止）持续维持可读；挂脖朝地（|az|>0.7）不判向。
+// 自动转向 v6.2：翻转方向定向 + 防抖（2026-09-26 卡死修复）。
+// 原理（v6）：翻面 = 绕某轴的 180° 旋转，拿起瞬间的陀螺仪符号直接编码
+// "从哪边翻上来"——与最终静止姿态无关，绕开装配坐标歧义。运动中积分
+// gyro X/Y，静止确认后按 |积分| 大者（翻面轴因人而异）的符号定向；
+// 积分不足则兜底用"面内重力主轴符号"。
+// v6.1 病根（真机卡死实锤）：录音中横持设备（az≈0）微微摆动，面内分量
+// 在 0 附近反复过零 → 兜底判向 0°/180° 连环翻转 → 全屏重绘 + 外沿光效
+// 反复触发，与录音 UI 抢渲染/内存直到卡死。三重防抖：
+//   ① 录音中不判向不翻转（录音界面有自己的动画，转向纯属捣乱）；
+//   ② 静止判向一轮只评一次（原先过 400ms 后每 10ms 连评，日志刷屏）；
+//   ③ 兜底判向加死区：面内主分量 |s|<0.35g（≈±20° 过渡区）保持现状，
+//     外加 3s 翻转冷却，杜绝来回横跳。
 void Wake::tickRotation(float dev, uint32_t now) {
     if (settings_ != nullptr && !settings_->autoRotateEnabled()) return;
-    if (app_ == nullptr || app_->screen() != ScreenState::On) {
+    if (app_ == nullptr || app_->screen() != ScreenState::On ||
+        app_->isRecording()) {
         rotSteadySince_ = 0;
+        flipIx_ = 0;
+        flipIy_ = 0;
         return;
     }
-    if (dev > 0.2f) {
-        rotSteadySince_ = 0;   // 运动中不判向（防摆动途中乱翻）
+    if (dev > 0.3f) {
+        // 运动中：积分翻转角速度（X/Y 双轴，dps×10ms→度）。翻面旋转轴
+        // 因人而异（横滚/俯仰），只看单轴会把另一类翻法积成 0（v6 首版
+        // 病根：只积 X → 用户翻法走 Y → 恒 0 → 永走兜底 → "怎么拿都不变"）
+        float gx = 0, gy = 0, gz = 0;
+        if (imu_->readGyro(&gx, &gy, &gz)) {
+            flipIx_ += gx * 0.01f;
+            flipIy_ += gy * 0.01f;
+        }
+        rotSteadySince_ = 0;
         return;
     }
     if (fabsf(az_) > 0.7f) {
         rotSteadySince_ = 0;   // 朝天/朝地：面内无重力分量，不判向
         return;
     }
-    const int cand = (ax_ < 0.0f) ? 180 : 0;
-    if (cand != rotCandDeg_ || rotSteadySince_ == 0) {
-        rotCandDeg_ = cand;
+    // 静止确认（400ms）后评一次就走，再静 400ms 才有下一轮
+    if (rotSteadySince_ == 0) {
         rotSteadySince_ = now;
         return;
     }
-    if (now - rotSteadySince_ >= 400 && cand != rotCurDeg_) {
-        rotCurDeg_ = cand;
-        ESP_LOGI(TAG, "[ROT] ax=%+.2f → %s", ax_,
-                 cand == 180 ? "翻转" : "正位");
-        if (onRotation_) onRotation_(cand);
+    if (now - rotSteadySince_ < ROT_STEADY_MS) return;
+    rotSteadySince_ = 0;
+    int cand = rotCurDeg_;
+    const float dom = (fabsf(flipIx_) >= fabsf(flipIy_)) ? flipIx_ : flipIy_;
+    if (fabsf(dom) > 60.0f) {
+        // 符号→方向映射待标定（拿一次正的看日志翻正负即可定死）
+        cand = (dom > 0) ? 0 : 180;
+        ESP_LOGI(TAG, "[ROT] 翻转积分 X=%+.0f Y=%+.0f → %d",
+                 flipIx_, flipIy_, cand);
+    } else {
+        // 静态兜底：面内重力主轴符号（横持时 X/Y 必有一轴 ≈±1g）。
+        // 死区内保持现状不翻——微摆过零来回判是 v6.1 卡死的直接根因
+        const float s = (fabsf(ax_) >= fabsf(ay_)) ? ax_ : ay_;
+        if (fabsf(s) >= ROT_STATIC_MIN) cand = (s < 0.0f) ? 180 : 0;
+        ESP_LOGI(TAG, "[ROT] 积分不足（X=%+.0f Y=%+.0f）→ 兜底 s=%+.2f → %d",
+                 flipIx_, flipIy_, s, cand);
     }
+    flipIx_ = 0;
+    flipIy_ = 0;
+    if (cand == rotCurDeg_) return;
+    if (rotLastFlipMs_ != 0 && now - rotLastFlipMs_ < ROT_COOLDOWN_MS) return;
+    rotCurDeg_ = cand;
+    rotLastFlipMs_ = now;
+    if (onRotation_) onRotation_(cand);
 }
 
 // 抬手状态机：Baseline（学静息方向）→ Motion（在窗）→ FaceUp（稳定持证）

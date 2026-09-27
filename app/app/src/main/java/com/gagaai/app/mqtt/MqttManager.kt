@@ -72,27 +72,50 @@ object MqttManager {
     @Volatile
     private var lastPort = -1
 
+    @Volatile
+    private var lastUser = ""
+
+    @Volatile
+    private var lastPass = ""
+
+    /**
+     * 连接 broker。username 留空 = 匿名（局域网无鉴权 broker 兼容）；
+     * 非空走 MQTT SimpleAuth（ADR-061：公网暴露必须开鉴权）。
+     * 幂等判断含凭据——地址没变但密码换了，也必须重建连接。
+     */
     @Synchronized
-    fun start(host: String, port: Int) {
-        // 幂等：地址没变且客户端还在（连接中或已连）→ 直接复用，不叠加并发连接
-        if (client != null && host == lastHost && port == lastPort) return
+    fun start(host: String, port: Int, username: String = "", password: String = "") {
+        // 幂等：地址+凭据没变且客户端还在（连接中或已连）→ 直接复用，不叠加并发连接
+        if (client != null && host == lastHost && port == lastPort && username == lastUser) return
         val gen = generation.incrementAndGet()
         retire(client)
         client = null
         connected = false
         lastHost = host
         lastPort = port
+        lastUser = username
+        lastPass = password
         if (host.isBlank()) {
             BridgeState.setMqttStatus("No broker configured")
             return
         }
         BridgeState.setMqttStatus("Connecting $host:$port")
-        val c = MqttClient.builder()
+        val builder = MqttClient.builder()
             .useMqttVersion3()
             .identifier(clientId)
             .serverHost(host)
             .serverPort(port)
-            // keepalive 默认 60s。刻意不配 automaticReconnect（类注释，ADR-044）
+        if (username.isNotBlank()) {
+            builder.simpleAuth()
+                .username(username)
+                .password(password.toByteArray(Charsets.UTF_8))
+                .applySimpleAuth()
+        }
+        val c = builder
+            // keepalive 15s（v0.4.9，2026-09-26）：ColorOS 熄屏会收割"空闲"
+            // 后台 socket（WiFi 高性能锁都拦不住，实锤），60s 心跳留下的
+            // 静默窗口正好被收割——压到 15s 让连接永远"有最近活动"。
+            // 刻意不配 automaticReconnect（类注释，ADR-044）
             .addConnectedListener {
                 if (!isCurrent(gen)) return@addConnectedListener
                 connected = true
@@ -112,13 +135,54 @@ object MqttManager {
         // 全局下行监听只注册这一次；之后每轮重连的 subscribe 都不带 callback，
         // 不会在 client 内叠加回调（重复下行坑，见类注释）
         c.publishes(MqttGlobalPublishFilter.ALL) { publish ->
-            if (!isCurrent(gen)) return@publishes
+            // 心跳时刻先行更新（在代际检查之前）：回调被调用本身就证明下行
+            // 通道活着——僵尸检测的判据就是"连接着但回调长期不被调用"
+            lastDownlinkAt.set(System.currentTimeMillis())
+            if (!isCurrent(gen)) {
+                // 可观测（2026-09-26 僵尸连接排查）：下行到达却被代际丢弃，
+                // 是"上行活下行死"的头号嫌疑路径，发生时必须留痕
+                BridgeState.log("⚠ 下行到达但代际过期被丢弃（client gen=$gen）")
+                return@publishes
+            }
             val bytes = publish.payloadAsBytes
             FrameLogger.downlink(bytes)
             onDownlink?.invoke(bytes)
         }
         client = c
+        lastDownlinkAt.set(0)  // 新客户端从零起判：等首帧下行再开始计时
         thread(name = "mqtt-supervisor", isDaemon = true) { supervise(gen, c) }
+    }
+
+    // ---- 下行僵尸自愈（2026-09-26 真机实锤的故障形态）----
+    // 症状：连接"健康"（上行发布正常、broker 侧在投递），但 publishes 回调
+    // 长期不被调用 → 设备收不到任何下行，App 状态栏全绿，零错误日志。
+    // 根因悬置在 HiveMQ 客户端内部（keepalive 超时重连若干轮后出现），
+    // 自愈不依赖根因：服务端每 30s 发一帧 hello_ack 心跳，"已连接却 90s
+    // 无任何下行回调" = 判死，整个 client 推倒重建（stop+start 同地址）。
+    private val lastDownlinkAt = java.util.concurrent.atomic.AtomicLong(0)
+
+    init {
+        thread(name = "mqtt-downlink-watchdog", isDaemon = true) {
+            while (true) {
+                Thread.sleep(10_000)
+                val c = client ?: continue
+                if (!connected) continue
+                val last = lastDownlinkAt.get()
+                if (last == 0L) continue  // 还没收到过任何下行：等首帧
+                // 45s（v0.4.12 收紧，原 90s）：服务端心跳 30s 一跳，健康连接
+                // 不可能 45s 无下行。重建成本 ≈2s，误杀无害——把熄屏僵尸期的
+                // 黄卡等待窗从最长 100s 压到 ~55s
+                if (System.currentTimeMillis() - last > 45_000) {
+                    BridgeState.log("🔄 MQTT 下行僵尸 >45s，强制重建客户端")
+                    val host = lastHost
+                    val port = lastPort
+                    val user = lastUser
+                    val pass = lastPass
+                    stop()
+                    if (host.isNotBlank()) start(host, port, user, pass)
+                }
+            }
+        }
     }
 
     /**
@@ -129,7 +193,12 @@ object MqttManager {
         var backoff = RETRY_DELAY_MS
         while (isCurrent(gen)) {
             try {
-                c.connect().get(CONNECT_WAIT_MS, TimeUnit.MILLISECONDS)
+                // keepAlive 15s（v0.4.9）：ColorOS 熄屏收割"空闲"后台 socket
+                //（WiFi 高性能锁都拦不住，实锤），60s 心跳的静默窗口正好被
+                // 收割——压到 15s 让连接永远"有最近活动"。keepAlive 在
+                // HiveMQ 是连接参数（connectWith），不在 client builder 上
+                c.connectWith().keepAlive(15).send()
+                    .get(CONNECT_WAIT_MS, TimeUnit.MILLISECONDS)
             } catch (e: Exception) {
                 if (!isCurrent(gen)) return
                 val cause = e.message ?: e.javaClass.simpleName
@@ -174,6 +243,8 @@ object MqttManager {
                 if (error != null) {
                     BridgeState.log("Subscribe $TOPIC_DOWN failed: ${error.message ?: error.javaClass.simpleName}")
                 } else {
+                    // 订阅落定 = 下行僵尸计时的起跑线（90s 内必有心跳到）
+                    lastDownlinkAt.set(System.currentTimeMillis())
                     BridgeState.log("Subscribed $TOPIC_DOWN")
                 }
             }

@@ -17,6 +17,7 @@ idf_component_register(
         "ui/FontFilter.cpp"
         "ui/fonts/gaga_font_cjk_16.c"
         "ui/assets/img_duck.c"
+        "ui/assets/img_duck16.c"   # 卡片答行 16px 鸭图标
         "audio/AudioPipe.cpp"
         "audio/OpusCodec.cpp"
         "audio/OggDemux.cpp"

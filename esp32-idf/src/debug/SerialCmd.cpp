@@ -62,7 +62,7 @@ void SerialCmd::handleKey(uint8_t c) {
     AppContext& k = *ctx_;
     switch (c) {
     // ---------------- 【用户调试】 ----------------
-    case 'r':  // 模拟按住说话：空闲=开录，录音中=收尾（不走松手宽限）
+    case 'r':  // 模拟开/关录音（与右下按下沿、摇动同权）：空闲=开录，录音中=收尾判定
         k.rec->toggle();
         break;
     case 't':  // 模拟右上长按：talk 开始 / 结束切换
@@ -78,12 +78,6 @@ void SerialCmd::handleKey(uint8_t c) {
         k.app->setScreen(k.app->screen() == ScreenState::On ? ScreenState::Off
                                                             : ScreenState::On);
         k.app->notifyActivity();
-        break;
-    case 'w':  // 松手宽限循环
-        k.rec->cycleGrace();
-        break;
-    case 'l':  // 锁定模式开关
-        k.rec->toggleLatch();
         break;
     case 'S': {  // 设置页开/关（触摸之外的入口）
         static bool open = false;

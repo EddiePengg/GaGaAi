@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主容器：5 个视图叠在 FrameLayout 里，靠 visibility 切换（圆屏无转场更省电） -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:keepScreenOn="true"
+    tools:context=".MainActivity">
+
+    <include android:id="@+id/viewCards" layout="@layout/view_cards" />
+    <include android:id="@+id/viewDuck" layout="@layout/view_duck" />
+    <include android:id="@+id/viewPanel" layout="@layout/view_panel" />
+    <include android:id="@+id/viewSettings" layout="@layout/view_settings" />
+    <include android:id="@+id/viewDebug" layout="@layout/view_debug" />
+    <include android:id="@+id/viewDetail" layout="@layout/view_detail" />
+
+</FrameLayout>

@@ -20,11 +20,21 @@ class AppState;
 class Power {
 public:
     static constexpr uint32_t IDLE_TIMEOUT_MS = 10 * 60 * 1000;  // 挂机 10 分钟深睡
+    // 夜间深睡（2026-09-27，凌晨电老鼠修复）：手机 App 的保活让 BLE 一夜
+    // 不断 → 原门禁"未连"永不满足 → 设备整夜跑 ~100mA（CPU 循环 + IMU
+    // 94Hz + 射频 33 次/s 唤醒），600mAh 到凌晨 4 点剩 3%（用户实测）。
+    // 夜间窗口内息屏挂满 30 分钟，连着也睡：通宵 <1mA。白天维持原门禁
+    // （连着不睡——保住"消息息屏直达"的产品承诺）。RTC 未对时则不启用
+    // （拿不准几点就保守不睡）。唤醒 = BOOT/PWR 键，醒来 BLE 自动重连。
+    static constexpr int      NIGHT_BEGIN_HOUR  = 1;              // 01:00 起
+    static constexpr int      NIGHT_END_HOUR    = 7;              // 07:00 前
+    static constexpr uint32_t NIGHT_CONNECTED_IDLE_MS = 30 * 60 * 1000;
 
     void begin(AppState* app);
 
     // appTask 每 10ms 调用：管息屏降频 + 深睡判定。
-    // bleConnected：当前 BLE 是否连着手机（连着=可能随时说话，不深睡）
+    // bleConnected：当前 BLE 是否连着手机（连着=可能随时说话，不深睡；
+    // 夜间窗口例外，见上）
     void tick(bool bleConnected);
 
     // 串口 'Z'：立即深睡（验证唤醒路径）

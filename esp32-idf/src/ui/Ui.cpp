@@ -11,6 +11,7 @@
 #include "state/Settings.h"
 #include "ui/FontFilter.h"
 #include "assets/img_duck.h"
+#include "assets/img_duck16.h"
 #include "input/PwrKey.h"
 #include "input/Rtc.h"
 #include "ui/Display.h"
@@ -59,6 +60,12 @@ static lv_obj_t* makeLabel(lv_obj_t* parent, const lv_font_t* font, lv_color_t c
     lv_obj_set_style_text_font(l, font, LV_PART_MAIN);
     lv_obj_set_style_text_color(l, color, LV_PART_MAIN);
     return l;
+}
+
+// 鸭图标显隐：只有 Failed 态文案不带"："前缀，图标让位
+static void duckShow(lv_obj_t* duck, bool show) {
+    if (show) lv_obj_clear_flag(duck, LV_OBJ_FLAG_HIDDEN);
+    else      lv_obj_add_flag(duck, LV_OBJ_FLAG_HIDDEN);
 }
 
 // 建"胶囊按钮"：文本 label + 半透明底 + 全圆角（返回键/开关/循环箭头通用形）
@@ -229,7 +236,7 @@ void Ui::begin(AppState* app, MsgLog* log) {
     lv_obj_t* tip1 = makeLabel(emptyCont_, FONT_CJK, lv_color_white());
     lv_label_set_text(tip1, "还没有消息");
     lv_obj_t* tip2 = makeLabel(emptyCont_, FONT_CJK, COL_SUB);
-    lv_label_set_text(tip2, "长按右下角说话");
+    lv_label_set_text(tip2, "点一下右下角说话（摇一摇也行）");
 
     // 卡片池一次性预建 20 张（HIDDEN 复用），避免每次消息变动都 create/delete 控件
     for (int i = 0; i < CARD_POOL; i++) {
@@ -242,18 +249,74 @@ void Ui::begin(AppState* app, MsgLog* log) {
         lv_obj_set_style_bg_opa(c.cont, OPA_CARD, LV_PART_MAIN);
         lv_obj_set_style_radius(c.cont, 16, LV_PART_MAIN);
         lv_obj_set_style_pad_all(c.cont, 12, LV_PART_MAIN);
-        lv_obj_set_style_pad_row(c.cont, 4, LV_PART_MAIN);
-        lv_obj_set_flex_flow(c.cont, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_left(c.cont, 12, LV_PART_MAIN);
+        lv_obj_set_style_pad_column(c.cont, 14, LV_PART_MAIN);  // 竖条与正文间距
+        // 行布局：左 = 状态竖条（贴卡缘、通高、随内容伸长），右 = 正文列。
+        // 竖条是卡片自身的一部分（内嵌式），不再是悬浮外贴元素
+        lv_obj_set_flex_flow(c.cont, LV_FLEX_FLOW_ROW);
         lv_obj_add_flag(c.cont, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(c.cont, LV_OBJ_FLAG_HIDDEN);
 
-        c.ask = makeLabel(c.cont, FONT_CJK, lv_color_white());
-        lv_obj_set_width(c.ask, lv_pct(100));
+        c.statBar = lv_obj_create(c.cont);
+        lv_obj_remove_style_all(c.statBar);
+        lv_obj_set_width(c.statBar, 2);
+        lv_obj_set_height(c.statBar, 84);
+        lv_obj_set_style_radius(c.statBar, 1, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(c.statBar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(c.statBar, COL_ACCENT, LV_PART_MAIN);
+        lv_obj_clear_flag(c.statBar, LV_OBJ_FLAG_CLICKABLE);
+
+        lv_obj_t* body = lv_obj_create(c.cont);
+        lv_obj_remove_style_all(body);
+        // ⚠️ lv_obj_create 默认带 CLICKABLE/SCROLLABLE——不清掉的话 body 整片
+        // 盖住卡片身区并成为命中目标，又没绑事件 = 点卡片中间/上方被吞、只有
+        // 四周留白能点进详情（2026-09-27 真机报障"卡片只能点右上角和最下面"
+        // 的根因；statBar 当年同坑已清，body 在"细卡片"改版时漏了）
+        lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_width(body, 0);               // 主轴 0 + flex_grow = 占据剩余宽
+        lv_obj_set_flex_grow(body, 1);
+        lv_obj_set_height(body, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(body, 4, LV_PART_MAIN);
+
+        // 首行横排：你问占伸展 + 时间贴右上角（用户定稿 2026-09-27：
+        // 时间放消息行内像系统日志，卡片右上角本来就空着）
+        c.askRow = lv_obj_create(body);
+        lv_obj_remove_style_all(c.askRow);
+        lv_obj_set_width(c.askRow, lv_pct(100));
+        lv_obj_set_height(c.askRow, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(c.askRow, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_row(c.askRow, 0, LV_PART_MAIN);
+        lv_obj_clear_flag(c.askRow, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(c.askRow, LV_OBJ_FLAG_SCROLLABLE);
+
+        c.ask = makeLabel(c.askRow, FONT_CJK, lv_color_white());
+        lv_obj_set_flex_grow(c.ask, 1);
         lv_obj_set_height(c.ask, 40);  // 2 行封顶
         lv_label_set_long_mode(c.ask, LV_LABEL_LONG_DOT);
 
-        c.reply = makeLabel(c.cont, FONT_CJK, COL_ACCENT);
-        lv_obj_set_width(c.reply, lv_pct(100));
+        c.time = makeLabel(c.askRow, FONT_NUM, COL_SUB);
+        lv_obj_set_style_pad_left(c.time, 6, LV_PART_MAIN);  // 与问文留 6px 间距
+
+        // 答行横排：[16px 鸭图标]"：内容"——图标顶替"GAGA"字样，冒号保留在
+        // 文本里（用户 2026-09-27 定稿："冒号可以保留，就表示你说了什么 Gaga
+        // 说了什么"）。Failed 态文案不带冒号前缀，图标让位（renderList 里隐藏）
+        c.replyRow = lv_obj_create(body);
+        lv_obj_remove_style_all(c.replyRow);
+        lv_obj_set_width(c.replyRow, lv_pct(100));
+        lv_obj_set_height(c.replyRow, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(c.replyRow, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_row(c.replyRow, 2, LV_PART_MAIN);
+        lv_obj_clear_flag(c.replyRow, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(c.replyRow, LV_OBJ_FLAG_SCROLLABLE);
+
+        c.duck = lv_image_create(c.replyRow);
+        lv_image_set_src(c.duck, &img_duck16);   // 16px 与 FONT_CJK 字号齐平
+        lv_obj_clear_flag(c.duck, LV_OBJ_FLAG_CLICKABLE);
+
+        c.reply = makeLabel(c.replyRow, FONT_CJK, COL_ACCENT);
+        lv_obj_set_flex_grow(c.reply, 1);
         lv_obj_set_height(c.reply, 40);  // 2 行封顶
         lv_label_set_long_mode(c.reply, LV_LABEL_LONG_DOT);
     }
@@ -276,8 +339,22 @@ void Ui::begin(AppState* app, MsgLog* log) {
     lv_obj_set_width(detailAsk_, lv_pct(100));
     lv_label_set_long_mode(detailAsk_, LV_LABEL_LONG_WRAP);
 
-    detailReply_ = makeLabel(detailCont_, FONT_CJK, COL_ACCENT);
-    lv_obj_set_width(detailReply_, lv_pct(100));
+    // 答行横排（与卡片一致）：鸭图标 + 自动换行全文；图标 16px 贴首行
+    detailReplyRow_ = lv_obj_create(detailCont_);
+    lv_obj_remove_style_all(detailReplyRow_);
+    lv_obj_set_width(detailReplyRow_, lv_pct(100));
+    lv_obj_set_height(detailReplyRow_, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(detailReplyRow_, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_row(detailReplyRow_, 2, LV_PART_MAIN);
+    lv_obj_clear_flag(detailReplyRow_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(detailReplyRow_, LV_OBJ_FLAG_SCROLLABLE);
+
+    detailDuck_ = lv_image_create(detailReplyRow_);
+    lv_image_set_src(detailDuck_, &img_duck16);
+    lv_obj_clear_flag(detailDuck_, LV_OBJ_FLAG_CLICKABLE);
+
+    detailReply_ = makeLabel(detailReplyRow_, FONT_CJK, COL_ACCENT);
+    lv_obj_set_flex_grow(detailReply_, 1);
     lv_label_set_long_mode(detailReply_, LV_LABEL_LONG_WRAP);
     lv_obj_add_flag(detailCont_, LV_OBJ_FLAG_HIDDEN);
 
@@ -750,49 +827,76 @@ void Ui::renderList() {
 
         // static：全文 2048B 级，放栈上会把 8KB 的 appTask 顶爆
         static char buf[2216];
-        // ask 文本：还没识别回来时先占位"识别中…"
+        // 发送时刻：卡片右上角独立小标签（2026-09-27 定稿；此前拼在 GAGA
+        // 行内像系统日志被否）。RTC 没对过时的卡隐藏时间
+        char hm[8];
+        if (rtcHmAt(m->createdAtMs, hm, sizeof(hm))) {
+            lv_label_set_text(c.time, hm);
+            lv_obj_clear_flag(c.time, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(c.time, LV_OBJ_FLAG_HIDDEN);
+        }
+        // ask 文本：还没识别回来时先占位"识别中…"；超 60s 换"识别超时，
+        // 仍在等…"（软文案：state 仍是 Sending，迟到 receipt 照样填入）
         snprintf(buf, sizeof(buf), "你：%s",
-                 m->state == MsgState::Sending ? "识别中…" : m->ask);
+                 m->state == MsgState::Sending
+                     ? (MsgLog::sendingTimedOut(*m, now) ? "识别超时，仍在等…" : "识别中…")
+                     : m->ask);
         lv_label_set_text(c.ask, buf);
 
         switch (m->state) {
         case MsgState::Sending:
-            lv_label_set_text(c.reply, "GAGA：发送中…");
+            duckShow(c.duck, true);
+            lv_label_set_text(c.reply, "：发送中…");
             lv_obj_set_style_text_color(c.reply, COL_SUB, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(c.statBar, COL_ACCENT, LV_PART_MAIN);
             break;
         case MsgState::Waiting: {
+            duckShow(c.duck, true);
+            lv_obj_set_style_bg_color(c.statBar, lv_color_hex(0x4EE44E),
+                                      LV_PART_MAIN);
             if (MsgLog::softTimedOut(*m, now)) {
                 // 软超时：文案让位给"（还没回复）"，state 仍是 Waiting
-                lv_label_set_text(c.reply, "GAGA：（还没回复）");
+                lv_label_set_text(c.reply, "：（还没回复）");
             } else {
                 // "正在回复…"动效：dotsPhase_ 每 500ms 换一档（tick 里推进）
                 static const char* kDots[4] = {"", ".", "..", "..."};
-                snprintf(buf, sizeof(buf), "GAGA：正在回复%s", kDots[dotsPhase_ & 3]);
+                snprintf(buf, sizeof(buf), "：正在回复%s", kDots[dotsPhase_ & 3]);
                 lv_label_set_text(c.reply, buf);
             }
             lv_obj_set_style_text_color(c.reply, COL_SUB, LV_PART_MAIN);
             break;
         }
         case MsgState::Replied:
-            snprintf(buf, sizeof(buf), "GAGA：%s", m->reply);
+            duckShow(c.duck, true);
+            snprintf(buf, sizeof(buf), "：%s", m->reply);
             lv_label_set_text(c.reply, buf);
             lv_obj_set_style_text_color(c.reply, COL_ACCENT, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(c.statBar, lv_color_hex(0x4EE44E),
+                                      LV_PART_MAIN);
             break;
         case MsgState::Failed:
+            duckShow(c.duck, false);
             snprintf(buf, sizeof(buf), "发送失败：%s", m->reply);
             lv_label_set_text(c.reply, buf);
             lv_obj_set_style_text_color(c.reply, lv_palette_main(LV_PALETTE_RED),
                                         LV_PART_MAIN);
+            lv_obj_set_style_bg_color(c.statBar, lv_palette_main(LV_PALETTE_RED),
+                                      LV_PART_MAIN);
             break;
         }
     }
     if (n == 0) lv_obj_clear_flag(emptyCont_, LV_OBJ_FLAG_HIDDEN);
     else        lv_obj_add_flag(emptyCont_, LV_OBJ_FLAG_HIDDEN);
     renderedVersion_  = log_->version();
-    // 记下当前是否已有软超时卡：tick() 靠它判断"（还没回复）"文案要不要重刷
+    // 记下当前是否已有软超时卡：tick() 靠它判断"（还没回复）/识别超时"文案要不要重刷
     renderedTimeout_  = false;
     for (int i = 0; i < n; i++) {
-        if (MsgLog::softTimedOut(*log_->at(i), now)) { renderedTimeout_ = true; break; }
+        const Msg* m = log_->at(i);
+        if (MsgLog::softTimedOut(*m, now) || MsgLog::sendingTimedOut(*m, now)) {
+            renderedTimeout_ = true;
+            break;
+        }
     }
 }
 
@@ -805,29 +909,35 @@ void Ui::renderDetail() {
     }
     static char buf[2216];
     snprintf(buf, sizeof(buf), "你：%s",
-             m->state == MsgState::Sending ? "识别中…" : m->ask);
+             m->state == MsgState::Sending
+                 ? (MsgLog::sendingTimedOut(*m, millis()) ? "识别超时，仍在等…" : "识别中…")
+                 : m->ask);
     lv_label_set_text(detailAsk_, buf);
 
     switch (m->state) {
     case MsgState::Sending:
-        lv_label_set_text(detailReply_, "GAGA：发送中…");
+        duckShow(detailDuck_, true);
+        lv_label_set_text(detailReply_, "：发送中…");
         break;
     case MsgState::Waiting:
+        duckShow(detailDuck_, true);
         if (MsgLog::softTimedOut(*m, millis())) {
             // 软超时后安抚用户：回复到了会自己刷出来
-            lv_label_set_text(detailReply_, "GAGA：（还没回复）\n回复到了会自动显示");
+            lv_label_set_text(detailReply_, "：（还没回复）\n回复到了会自动显示");
         } else {
             // 同列表卡："正在回复…"动效
             static const char* kDots[4] = {"", ".", "..", "..."};
-            snprintf(buf, sizeof(buf), "GAGA：正在回复%s", kDots[dotsPhase_ & 3]);
+            snprintf(buf, sizeof(buf), "：正在回复%s", kDots[dotsPhase_ & 3]);
             lv_label_set_text(detailReply_, buf);
         }
         break;
     case MsgState::Replied:
-        snprintf(buf, sizeof(buf), "GAGA：%s", m->reply);
+        duckShow(detailDuck_, true);
+        snprintf(buf, sizeof(buf), "：%s", m->reply);
         lv_label_set_text(detailReply_, buf);
         break;
     case MsgState::Failed:
+        duckShow(detailDuck_, false);
         snprintf(buf, sizeof(buf), "发送失败：%s", m->reply);
         lv_label_set_text(detailReply_, buf);
         break;
@@ -996,6 +1106,17 @@ void Ui::setBleConnected(bool connected) {
 // MsgLog 变了（receipt/reply/error/松手建卡）→ 重刷当前视图。
 // reply 到达的两条路：亮屏中到这里就地更新、不抢屏；息屏则由上层调
 // openDetail() 亮屏直达这张卡的详情。
+// 亮屏强制全量重刷（ADR-054）：熄屏期间 tick 被闸，迟到的事件（receipt/
+// reply/时钟走字）只改了数据没上屏，亮屏瞬间全树 invalidate + 立即重绘，
+// 保证睁眼看到的一定是最新状态（也兜住 DISPOFF 期间 GRAM 滞后的不确定性）
+void Ui::fullRefresh() {
+    if (displayLock(200)) {
+        lv_obj_invalidate(lv_screen_active());
+        lv_refr_now(nullptr);
+        displayUnlock();
+    }
+}
+
 void Ui::onLogChanged() {
     // 详情页认卡用 id：卡还在就原地刷新，被顶掉 renderDetail 自动回落列表
     applyState();
@@ -1152,6 +1273,11 @@ void Ui::closeSettings() {
 
 // ~10Hz 定时器：录音秒数 / 便签 2s 回落 / 状态栏 30s 刷 / "正在回复…"动效 / 软超时落地
 void Ui::tick() {
+    // 熄屏闸（ADR-054）：黑屏状态下所有周期渲染直接跳过。原先有等待卡时
+    // "正在回复…"动效每 500ms 全量重建 20 卡 + QSPI 刷屏，对着睡着的面板
+    // 刷一整夜——熄屏电老虎的大头。熄屏期间的迟到状态由 fullRefresh() 在
+    // 亮屏瞬间一次性对齐
+    if (displayIsSleeping()) return;
     // 录音计时刷新（秒粒度）
     if (app_->recState() == RecState::Recording) {
         const uint32_t sec = app_->recordingElapsedMs() / 1000;
@@ -1185,11 +1311,19 @@ void Ui::tick() {
     bool hasWaiting = false;
     const uint32_t now = millis();
     bool timeoutNow = false;
+    // ⚠️ 不做"Sending 超时转红"（2026-09-26 撤回）：ASR 识别经常 >8s，
+    // 一刀切 8s 转红 = 用户看到"发送失败"但群里其实收到了（昨晚实测）。
+    // 失败判定交给真正的错误信号：服务端 error 信令 / 缓存补发路径。
+    // 软文案例外（60s"识别超时，仍在等…"）：只换占位字，state 不变，
+    // 迟到 receipt 照样填入——和 Waiting 的"（还没回复）"同模式。
     for (int i = 0; i < log_->count(); i++) {
         const Msg* m = log_->at(i);
         if (m->state == MsgState::Waiting) {
             hasWaiting = true;
             if (MsgLog::softTimedOut(*m, now)) timeoutNow = true;
+        }
+        if (m->state == MsgState::Sending && MsgLog::sendingTimedOut(*m, now)) {
+            timeoutNow = true;
         }
     }
     const bool dotsDue = hasWaiting && (now - lastDotsMs_) >= 500;

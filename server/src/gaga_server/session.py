@@ -22,6 +22,7 @@ import logging
 import re
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -60,9 +61,27 @@ class SessionManager:
         self._rec_stop_ts = 0.0
         self._rec_duration_ms: int | None = None
         self._archive_path: Path | None = None  # 本段录音的存档文件（识别后重命名）
+        # 对账台账（2026-09-26）：receipt/error 结果信令按序留最近 5 条，
+        # 设备 rec_status_query 时全部重发（幂等）。只记 1 条的旧设计在
+        # "熄屏连发多条 + 下行丢失"场景下救不回中间卡（僵尸连接实测）。
+        # 设备 fillAsk 是 FIFO 配对——重发必须保持原顺序（append 序即时间序）。
+        # (device, signal) 元组：receipt/error 按 device 记账（2026-09-27
+        # 多设备串扰修复——手表和胸前嘎嘎同群同 broker，混账会导致手表的
+        # ASR 文本被补发给胸前设备的卡片，真机实锤）
+        self._result_signals: deque = deque(maxlen=5)
+        # msg_id → device：reply 路由用（reply_to 找回消息归属，reply 盖同款戳）
+        self._msgid_device: dict = {}
+        self._rec_device: str = ""   # 当前录音段归属设备
         # pipeline 串行执行：whisper 是 CPU 密集，并发只会互相拖慢
         self._executor = ThreadPoolExecutor(max_workers=1,
                                             thread_name_prefix="pipeline")
+
+    def device_for_msg(self, msg_id: str) -> str:
+        """这条上行消息（平台 msg_id）归属哪个设备。reply 路由盖戳用
+        （ADR-057：reply 必须带 device 戳才能进按设备的补发台账——无戳
+        reply 广播能到但丢了没人补，熄屏僵尸窗实测全灭）。空 = 未知。"""
+        with self._lock:
+            return self._msgid_device.get(msg_id, "")
 
     # ---- 帧入口（MQTT 线程调用）----
 
@@ -115,6 +134,9 @@ class SessionManager:
             # hello_ack：纯对时（envelope ts 自动补），设备状态栏时钟开机即校准
             self.publish_json({"type": "hello_ack"})
         elif sig == "rec_start":
+            # 本段归属设备（2026-09-27 多设备串扰修复）：信令显式携带优先，
+            # 回落 hello 登记（旧固件）。receipt/对账都按它记账。
+            self._rec_device = str(msg.get("device", "")) or self.device
             if self.talk is not None and self.talk.is_active():
                 self.publish_json({"type": "error", "code": "BUSY",
                                    "msg": "实时对话进行中，不能录音"})
@@ -192,6 +214,25 @@ class SessionManager:
             if self.talk is not None and self.talk.is_active():
                 log.info("talk_end 收到（设备主动结束）")
                 self.talk.stop("device_end")
+        elif sig == "rec_status_query":
+            # 设备端对账：卡片发送超时未收到回执时主动查询，按序重发台账里
+            # 的全部结果信令（幂等——设备 fillAsk/failSending 对重复信令安全；
+            # FIFO 配对要求顺序与首发一致，deque 迭代序即时间序）
+            # 按设备过滤（2026-09-27）：查询信令带 device；旧固件不带时回落
+            # hello 登记的当前设备——单设备部署零影响。
+            qdev = str(msg.get("device", "")) or self.device or ""
+            with self._lock:
+                pending = [sig_ for (dev_, sig_) in self._result_signals
+                           if dev_ == qdev]
+            if pending:
+                log.info("rec_status_query（%s）→ 重发 %d 条结果信令",
+                         qdev or "未登记", len(pending))
+                for s_ in pending:
+                    self.publish_json(s_)
+            else:
+                log.info("rec_status_query（%s）→ 无该设备的历史结果可重发",
+                         qdev or "未登记")
+
         elif sig == "ping":
             log.debug("ping（device=%s）", self.device or "未登记")
         else:
@@ -305,13 +346,23 @@ class SessionManager:
         """录音结果统一下行：成功 → receipt（带接入端 msg_id），失败 → error。
         批处理与流式两条链路的收尾共用，保证信令形态一致。
         成功时顺带把存档文件重命名成"带识别文本"的，方便回听定位。"""
+        dev = self._rec_device or self.device or ""
         if result.ok:
             self._rename_archive(archive_path, result.text)
             extra = {"msg_id": result.msg_id} if result.msg_id else {}
-            self.publish_json({"type": "receipt", "text": result.text, **extra})
+            signal = {"type": "receipt", "text": result.text,
+                      "device": dev, **extra}
+            if result.msg_id:
+                with self._lock:
+                    self._msgid_device[result.msg_id] = dev
+                    while len(self._msgid_device) > 50:
+                        self._msgid_device.pop(next(iter(self._msgid_device)))
         else:
-            self.publish_json({"type": "error", "code": result.code,
-                               "msg": result.msg})
+            signal = {"type": "error", "code": result.code,
+                      "msg": result.msg, "device": dev}
+        with self._lock:
+            self._result_signals.append((dev, signal))
+        self.publish_json(signal)
 
     def _run(self, packets: list[bytes], archive_path: Path | None = None) -> None:
         """本地批处理路径（默认链路 + 流式失败的降级兜底）。"""

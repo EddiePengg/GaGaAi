@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 大按钮：鸭黄实心圆 + 墨色描边，圆屏中央视觉锚点 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/duck_yellow" />
+    <stroke
+        android:width="3dp"
+        android:color="@color/duck_yellow_dark" />
+    <size
+        android:width="120dp"
+        android:height="120dp" />
+</shape>

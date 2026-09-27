@@ -38,3 +38,12 @@ server/test-audio/
 
 # 服务端运行日志
 server/server.log
+
+# ===== watch/（独立 Gradle 工程，ADR-051）=====
+watch/.gradle/
+watch/.kotlin/
+watch/build/
+watch/local.properties
+
+# MQTT 鉴权（ADR-061）：密码文件与哈希不入库，各环境本地生成
+server/mosquitto/passwd

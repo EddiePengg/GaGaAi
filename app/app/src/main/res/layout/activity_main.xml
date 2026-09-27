@@ -442,52 +442,95 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:orientation="horizontal"
+                    android:orientation="vertical"
                     android:visibility="gone">
 
-                    <EditText
-                        android:id="@+id/etBrokerHost"
-                        android:layout_width="0dp"
-                        android:layout_height="46dp"
-                        android:layout_weight="1.5"
-                        android:background="@drawable/bg_input"
-                        android:hint="Server host"
-                        android:inputType="textUri"
-                        android:paddingStart="12dp"
-                        android:paddingEnd="12dp"
-                        android:singleLine="true"
-                        android:textColor="@color/ink"
-                        android:textSize="13sp" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
 
-                    <EditText
-                        android:id="@+id/etBrokerPort"
-                        android:layout_width="0dp"
-                        android:layout_height="46dp"
-                        android:layout_marginStart="8dp"
-                        android:layout_weight="1"
-                        android:background="@drawable/bg_input"
-                        android:hint="Port"
-                        android:inputType="number"
-                        android:paddingStart="12dp"
-                        android:paddingEnd="12dp"
-                        android:singleLine="true"
-                        android:textColor="@color/ink"
-                        android:textSize="13sp" />
+                        <EditText
+                            android:id="@+id/etBrokerHost"
+                            android:layout_width="0dp"
+                            android:layout_height="46dp"
+                            android:layout_weight="1.5"
+                            android:background="@drawable/bg_input"
+                            android:hint="Server host"
+                            android:inputType="textUri"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:singleLine="true"
+                            android:textColor="@color/ink"
+                            android:textSize="13sp" />
 
-                    <Button
-                        android:id="@+id/btnSaveBroker"
-                        android:layout_width="wrap_content"
-                        android:layout_height="46dp"
-                        android:layout_marginStart="8dp"
-                        android:background="@drawable/bg_btn_start"
-                        android:paddingStart="14dp"
-                        android:paddingEnd="14dp"
-                        android:stateListAnimator="@null"
-                        android:text="💾 Save"
-                        android:textAllCaps="false"
-                        android:textColor="@color/ink"
-                        android:textSize="13sp"
-                        android:textStyle="bold" />
+                        <EditText
+                            android:id="@+id/etBrokerPort"
+                            android:layout_width="0dp"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_input"
+                            android:hint="Port"
+                            android:inputType="number"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:singleLine="true"
+                            android:textColor="@color/ink"
+                            android:textSize="13sp" />
+
+                        <Button
+                            android:id="@+id/btnSaveBroker"
+                            android:layout_width="wrap_content"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_btn_start"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:stateListAnimator="@null"
+                            android:text="💾 Save"
+                            android:textAllCaps="false"
+                            android:textColor="@color/ink"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- MQTT 鉴权（ADR-061 公网暴露）：留空 = 匿名，兼容局域网无鉴权 broker -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:orientation="horizontal">
+
+                        <EditText
+                            android:id="@+id/etMqttUser"
+                            android:layout_width="0dp"
+                            android:layout_height="46dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_input"
+                            android:hint="MQTT 用户名（可选）"
+                            android:inputType="text"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:singleLine="true"
+                            android:textColor="@color/ink"
+                            android:textSize="13sp" />
+
+                        <EditText
+                            android:id="@+id/etMqttPass"
+                            android:layout_width="0dp"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_input"
+                            android:hint="MQTT 密码（可选）"
+                            android:inputType="textPassword"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:singleLine="true"
+                            android:textColor="@color/ink"
+                            android:textSize="13sp" />
+                    </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
 

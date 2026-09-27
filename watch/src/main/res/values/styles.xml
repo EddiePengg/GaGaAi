@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 设置页 / 调试页共用样式，圆屏小屏靠字号和间距撑出层级 -->
+
+    <style name="SectionHeader">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">10dp</item>
+        <item name="android:textColor">@color/duck_yellow</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="FieldLabel">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">4dp</item>
+        <item name="android:textColor">@color/ink_soft</item>
+        <item name="android:textSize">10sp</item>
+    </style>
+
+    <style name="FieldInput">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:background">@drawable/bg_input</item>
+        <item name="android:padding">6dp</item>
+        <item name="android:textColor">@color/bg_warm</item>
+        <item name="android:textColorHint">@color/ink_soft</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+
+    <style name="ToggleRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">4dp</item>
+        <item name="android:background">@drawable/bg_btn_ghost</item>
+        <item name="android:padding">7dp</item>
+        <item name="android:textColor">@color/bg_warm</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+
+    <style name="DbgHeader">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">@color/ink_soft</item>
+        <item name="android:textSize">9sp</item>
+    </style>
+
+    <style name="DbgBtn">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_margin">3dp</item>
+        <item name="android:background">@drawable/bg_btn_ghost</item>
+        <item name="android:gravity">center</item>
+        <item name="android:padding">7dp</item>
+        <item name="android:textColor">@color/bg_warm</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+</resources>

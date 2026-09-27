@@ -53,6 +53,7 @@ class GagaService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var bleManager: BleManager? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     /** MQTT 最新状态（null=尚未连过）。连/断即刻经 BLE 推给设备（ADR-038）。 */
     @Volatile
@@ -77,12 +78,20 @@ class GagaService : Service() {
         Prefs.ensureLoaded(this)
         isRunning = true
         createNotificationChannel()
+        // WiFi 高性能锁（2026-09-26 晚实锤修复）：熄屏瞬间 ColorOS 把 WiFi
+        // 射频打入休眠挂起（dumpsys wifi: CMD_SET_SUSPEND_OPT_ENABLED
+        // screen=off），后台长连接秒死——"今天熄屏 MQTT 就断、昨天骑车
+        // 移动数据一整天都稳"的差异根源。前台服务持有 WifiLock 可阻止
+        // 休眠挂起；WAKE_LOCK 权限清单已有。release 走 onDestroy。
+        wifiLock = (getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager)
+            .createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "gaga-bridge")
+        wifiLock?.acquire()
         val state = BridgeState.current()
         BridgeState.setServiceRunning(true)
         BridgeState.addListener(stateListener)
         startForegroundWithNotification(state)
         KeepAlive.armWatchdog(this)  // 保活第二条命：15 分钟看门狗自续期
-        BridgeState.log("Service started")
+        BridgeState.log("Service started（WiFi 锁已持有）")
 
         // MqttManager 是进程级单例（ADR-039）：服务重建不再新建客户端，
         // 杜绝同一 Client ID 多连接并发互踢（session taken over 乒乓）
@@ -102,7 +111,7 @@ class GagaService : Service() {
         ble.onReady = { pushLinkState() }  // 每次 BLE 就绪先同步当前 MQTT 状态
         bleManager = ble
 
-        MqttManager.start(Prefs.brokerHost, Prefs.brokerPort)
+        MqttManager.start(Prefs.brokerHost, Prefs.brokerPort, Prefs.mqttUser, Prefs.mqttPass)
         ble.start()
     }
 
@@ -123,8 +132,18 @@ class GagaService : Service() {
             ACTION_BROKER_CHANGED -> {
                 Prefs.load(this)
                 BridgeState.log("Broker changed, reconnecting MQTT")
-                // 单例 start 幂等：同地址直接复用现有连接，不同地址才重建
-                MqttManager.start(Prefs.brokerHost, Prefs.brokerPort)
+                // 单例 start 幂等：同地址+凭据直接复用现有连接，变了才重建
+                MqttManager.start(Prefs.brokerHost, Prefs.brokerPort, Prefs.mqttUser, Prefs.mqttPass)
+            }
+            com.gagaai.app.companion.GagaCompanionService.ACTION_KICK_RECONNECT -> {
+                // 伴生"出现"事件在连接存续期间会被系统反复投递（ColorOS CDM
+                // 周期性重报）：已就绪时不动作不打终端（v0.4.5 前每分钟一只
+                // 🐥 刷屏，用户以为在出事）；只在真需要重连时才说话
+                val ble = bleManager
+                if (ble == null || !ble.isReady()) {
+                    BridgeState.log("🐥 Companion kick: device appeared, reconnect now")
+                    ble?.kickReconnect()
+                }
             }
         }
         // START / 系统重启服务（intent 为 null）都保持运行
@@ -142,6 +161,7 @@ class GagaService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        if (wifiLock?.isHeld == true) wifiLock?.release()
         BridgeState.removeListener(stateListener)
         bleManager?.stop()
         MqttManager.stop()

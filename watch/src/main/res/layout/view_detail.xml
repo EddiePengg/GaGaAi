@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⑥ 消息详情页（点卡片进入，v0.3.2）：全文放开显示，从左往右滑返回首页
+     尺寸约束：233×233dp 圆屏，34dp 横向内边距，ScrollView 兜底长文 -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:fadeScrollbars="false"
+    android:paddingStart="34dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="34dp"
+    android:scrollbars="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvDetailTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:text="14:32"
+            android:textColor="@color/ink_soft"
+            android:textSize="10sp" />
+
+        <TextView style="@style/SectionHeader" android:text="你" />
+
+        <TextView
+            android:id="@+id/tvDetailAsk"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="@color/bg_warm"
+            android:textSize="11sp" />
+
+        <TextView style="@style/SectionHeader" android:text="嘎嘎" />
+
+        <TextView
+            android:id="@+id/tvDetailReply"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="#FFF6E3"
+            android:textSize="11sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:text="‹ 右滑返回"
+            android:textColor="@color/ink_soft"
+            android:textSize="9sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
+
+    </LinearLayout>
+</ScrollView>

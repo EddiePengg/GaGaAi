@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">嘎嘎</string>
+
+    <!-- 主界面状态文案 -->
+    <string name="state_idle">点一下说话</string>
+    <string name="state_recording">录音中…</string>
+    <string name="state_sending">发送中…</string>
+    <string name="state_waiting">接收中…</string>
+    <string name="state_reply">GAGA：</string>
+    <string name="state_waiting_reply">正在回复…</string>
+    <string name="state_error">出错了</string>
+
+    <!-- 权限 / 硬件 -->
+    <string name="need_mic_permission">需要麦克风权限才能发消息</string>
+    <string name="opus_unsupported">本机不支持 Opus 编码，无法发语音</string>
+</resources>

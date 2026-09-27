@@ -41,7 +41,7 @@
 
 ### 设备端消息卡（M6 反馈闭环 UI，fw-idf 0.3.0）
 
-一条消息 = 一次"按住说话"问答（发送占位 → receipt 填 ASR → reply 填回复）。固件 RAM 环形缓冲 20 条（约 13KB），重启即清；问答复配按 FIFO（receipt 认最早"发送中"，reply 认最早"等待回复"），`msg_id` 精确复配留给飞书官方 API 阶段。状态机：`Sending → Waiting → Replied / Failed`，Waiting 超 60s 显示"（还没回复）"（软超时，迟到 reply 照样点亮）。
+一条消息 = 一次录音问答（发送占位 → receipt 填 ASR → reply 填回复；触发方式：按下右下键或摇动，ADR-045 点对点）。卡片布局（ADR-061，2026-09-27 定稿）：首行 = 你问（左，flex 伸展）+ 发送时刻 HH:MM（右上角，`rtcHmAt` 按卡创建时刻换算；RTC 未对时的卡省略，对时后历史卡也能换算——硬件 RTC 播种让开机即有时刻）；答行 = 16px 鸭图标（`img_duck16`，顶替"GAGA"字样）+ "：内容"（冒号保留；Failed 态无前缀，图标隐藏）。固件 RAM 环形缓冲 20 条（约 13KB），重启即清；问答复配按 FIFO（receipt 认最早"发送中"，reply 认最早"等待回复"），`msg_id` 精确复配留给飞书官方 API 阶段。状态机：`Sending → Waiting → Replied / Failed`，Waiting 超 60s 显示"（还没回复）"、Sending 超 60s 显示"识别超时，仍在等…"（均软超时：只换文案不改状态，迟到 reply/receipt 照样点亮——硬转红曾撤回，ASR 慢是常态不是失败）。
 
 > 备注（2026-09-23，ADR-022）：M1 录音链路升级为火山流式 ASR 直通后**信令零变化**
 > （rec_start/rec_stop/receipt/error 语义不变），只是服务端内部从"攒段批处理"改为

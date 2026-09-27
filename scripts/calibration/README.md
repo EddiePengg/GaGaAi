@@ -11,6 +11,18 @@
 | `accel_capture.py` | IMU 原始数据流落盘（'A' 流 → 文件，带静默重试） | `python3 scripts/calibration/accel_capture.py [时长秒] [输出文件]` |
 | `heap_monitor.py` | 堆水位监视（每 60s 发 'h'，追内存泄露/卡死） | `python3 scripts/calibration/heap_monitor.py` |
 | `orient_calib.py` | 转向定标台（网页实时六轴 + A/B 姿势标注 + 自动推导判向公式） | `python3 scripts/calibration/orient_calib.py` → 开 http://127.0.0.1:8766 |
+| `attitude3d.py` | 3D 姿态台（Mahony 六轴融合实时复现姿态/动势 + v5 摇动判据镜像 + 滚动曲线） | `python3 scripts/calibration/attitude3d.py` → 开 http://127.0.0.1:8767 |
+
+## attitude3d 使用要点（2026-09-26）
+
+- **保持嘎嘎亮屏**：陀螺仪只在 Active 档（亮屏）输出，息屏后只有加速度，
+  页面会红字提醒。摇动/按键会自动亮屏。
+- 3D 视区：拖动转视角、滚轮缩放；黄色圆盘=设备（贴 gaga 表盘），蓝箭头=重力，
+  黄箭头=动态加速度（去重力），渐隐拖尾=屏幕朝向轨迹（动势）。姿态若与真机
+  呈镜像，点「镜像姿态」。
+- 判据面板是固件 v5 检测逻辑的原样浏览器镜像（0.6g 水平分量/4 摆/峰值 2.5g/
+  衰减 0.45）——摇一下就能看到"几摆、峰值多少 g、卡在哪道闸"，是调力度
+  阈值的直接依据（页面上触发≠设备真触发：'A' 流开着时固件抑制动作）。
 
 ## 注意事项
 

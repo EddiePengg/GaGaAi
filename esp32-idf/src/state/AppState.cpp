@@ -34,9 +34,32 @@ void AppState::tick() {
     // 无操作自动息屏（ADR-016）；录音/发送过程不息屏，保证状态可见。
     // talk 期间靠下行活动（notifyActivity）续命——对话安静 10s 屏幕照样睡，会话不断。
     // 时长可由用户设置（ADR-031），默认 10s。
-    if (screen_ == ScreenState::On && rec_ == RecState::Idle &&
+    if (screen_ == ScreenState::On) {
+        static uint32_t dimProbeLogMs = 0;
+        // 倒计时探针（2026-09-26）：整夜静置仍不熄屏的实锤后加——每 30s 报
+        // 一次剩余秒数+设置值+rec 态。剩余时间一直被拉回 = 有东西在刷活动
+        // 时间戳；剩余正常走完却没熄 = setScreen 回调路径问题。一看便知。
+        if (millis() - dimProbeLogMs >= 30000) {
+            dimProbeLogMs = millis();
+            ESP_LOGI(TAG, "[dim] 距息屏 %lus（设置 %lus，rec=%d）",
+                     static_cast<unsigned long>(
+                         (screenTimeoutMs_ - (millis() - lastActivityMs_)) / 1000),
+                     static_cast<unsigned long>(screenTimeoutMs_ / 1000),
+                     static_cast<int>(rec_));
+        }
+    }
+    if (screen_ == ScreenState::On &&
         (millis() - lastActivityMs_) >= screenTimeoutMs_) {
-        setScreen(ScreenState::Off);
+        static uint32_t dimBlockLogMs = 0;
+        if (rec_ != RecState::Idle) {
+            if (millis() - dimBlockLogMs >= 30000) {
+                dimBlockLogMs = millis();
+                ESP_LOGW(TAG, "息屏被抑制：rec=%d 非 Idle（录音/发送会话未结束？）",
+                         static_cast<int>(rec_));
+            }
+        } else {
+            setScreen(ScreenState::Off);
+        }
     }
 }
 
@@ -44,7 +67,7 @@ void AppState::tick() {
 void AppState::setScreen(ScreenState s) {
     if (screen_ == s) return;
     screen_ = s;
-    if (screenCb_) screenCb_(s);
+    for (auto& cb : screenCbs_) if (cb) cb(s);
 }
 
 // 戳活动时间戳：按键/触摸/talk 下行都算活动，用来续自动息屏的命

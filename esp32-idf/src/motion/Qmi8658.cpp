@@ -156,8 +156,27 @@ bool Qmi8658::readAccel(float* x, float* y, float* z) {
     return true;
 }
 
-bool Qmi8658::readGyro(float* x, float* y, float* z) {
-    if (!ready_) return false;
+// 功耗档位切换：亮屏 Active（500Hz+gyro）/ 息屏 Idle（94Hz 无 gyro）。
+// 序列照 SensorLib 姿势：改 ODR 前先关传感器（CTRL7），写完再开——
+// 运行中直接写 CTRL2/3 会被芯片拒绝。
+void Qmi8658::setPowerProfile(bool active) {
+    if (!ready_) return;
+    i2cLock();
+    wr(REG_CTRL7, 0x00);                         // 全关（改参数前置条件）
+    if (active) {
+        wr(REG_CTRL2, (1 << 4) | 4);             // accel 4G @500Hz
+        wr(REG_CTRL3, (6 << 4) | 4);             // gyro ±1024dps @448Hz
+        wr(REG_CTRL7, 0x03);                     // aEN|gEN
+    } else {
+        wr(REG_CTRL2, (1 << 4) | 2);             // accel 4G @93.9Hz（ODR 码 2）
+        wr(REG_CTRL7, 0x01);                     // 只开 accel
+    }
+    i2cUnlock();
+    profileActive_ = active;
+    ESP_LOGI(TAG, "IMU 功耗档 → %s", active ? "Active(500Hz+gyro)" : "Idle(94Hz)");
+}
+
+bool Qmi8658::readGyro(float* x, float* y, float* z) {    if (!ready_) return false;
     uint8_t b[6];
     i2cLock();
     const bool ok = rdN(REG_GX_L, b, 6);

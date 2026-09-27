@@ -4,9 +4,67 @@ MQTT 桥 + 帧重组 + 流式 ASR（千问 message，ADR-042）+ 接入端 chann
 里程碑 M1 已跑通：`curl 上传录音 → ASR → 飞书群出文字 → MQTT 回执`。
 M5 服务端已跑通：`talk_request → 豆包 Seeduplex 全双工 → 回复语音/文本下行`（ADR-021）。
 
-> ⚠️ **公网警告**：本期无鉴权（MQTT 匿名 + HTTP 调试口裸奔），前提仅限本机 +
-> 局域网 + 自托管内网。公网暴露**之前**必须补：MQTT username/password 或 TLS、
-> HTTP 口鉴权或干脆不暴露端口。
+> ⚠️ **公网警告**：HTTP 调试口仍裸奔，仅限本机 + 局域网 + 自托管内网，**不要**在路由器上映射 8000 端口。MQTT 已开鉴权（ADR-061，2026-09-27），公网暴露 1883 前先走完下面的「公网部署」。
+
+## 公网部署（MQTT 鉴权，ADR-061）
+
+手表出门在 4G / 外网 WiFi 也要用 → broker 暴露公网。**匿名公网 MQTT 不可接受**：
+扫描器分钟级发现新开的 1883（Shodan 常年扫），而 topic 全公开在 protocol.md——
+① 订 `gaga/down` 偷听全部对话转写（receipt/reply）；
+② 伪造设备发 `gaga/up` 往你的飞书群注入内容 + 烧 ASR/LLM 账单；
+③ 用 clientId `server` 连接互踢，直接瘫痪服务端。
+最低防线 = 用户名密码（TLS 是锦上添花，个人威胁模型下密码已挡掉绝大多数风险）。
+
+**迁移顺序（重要：先客户端后 broker，防断链）**：
+
+1. **先装支持鉴权的客户端并填好密码**：手表 ≥ v0.3.3 / App ≥ v0.4.14，
+   设置页各有「MQTT 用户名/密码」（留空 = 匿名，兼容局域网无鉴权 broker）。
+   局域网阶段可以先不填。
+2. **生成 mosquitto 密码文件**：
+
+   ```bash
+   # brew 本地部署（当前实际方式）：
+   /opt/homebrew/bin/mosquitto_passwd -b -c mosquitto/passwd gaga '你的强密码'
+   # docker 部署（在 server/ 目录）：
+   docker run --rm -v "$PWD/mosquitto:/m" eclipse-mosquitto:2 \
+     mosquitto_passwd -c -b /m/passwd gaga '你的强密码'
+   ```
+
+   （`-c` = 新建文件；**改密码/再加用户**时去掉 `-c`，否则会清掉已有用户。
+   两种部署各用各的 conf：本地 `mosquitto.conf` 的 `password_file mosquitto/passwd`
+   相对**启动目录**（在 server/ 下启动）；docker 用 `mosquitto-docker.conf`
+   绝对路径，compose 已挂好。）
+3. **服务端凭据**：`server/.env` 加两行（代码已支持，`config.py` →
+   `mqtt_bridge.py`；运行中的 gaga-server 不热读 .env，要重启才生效）：
+
+   ```dotenv
+   MQTT_USERNAME=gaga
+   MQTT_PASSWORD=你的强密码
+   ```
+
+4. **重启**：
+   ```bash
+   # brew 本地部署（当前实际方式）：
+   pkill mosquitto; /opt/homebrew/sbin/mosquitto -c mosquitto/mosquitto.conf &
+   pkill -f gaga-server; .venv/bin/gaga-server &   # 重读 .env 凭据
+   # docker 部署：
+   docker compose up -d --force-recreate mosquitto server
+   ```
+5. **路由器端口映射**：外部 1883（或换成 1833 之类非标端口躲无差别扫描）→
+   这台机器的 1883。客户端地址填 `公网IP或域名:端口`。
+6. **验证**（用任一台机器）：
+
+   ```bash
+   # 错密码 → 应被拒（Connection Refused: not authorised）
+   mosquitto_sub -h <公网IP> -p 1883 -u gaga -P 错的密码 -t 'gaga/down' -C 1
+   # 对密码 → 应在 30s 内收到一帧服务端心跳（hello_ack）
+   mosquitto_sub -h <公网IP> -p 1883 -u gaga -P 对的密码 -t 'gaga/down' -C 1
+   ```
+
+无 Docker 的本地起法（brew mosquitto）与上面同款命令（`/opt/homebrew/bin/mosquitto_passwd`）。
+注意 mosquitto 2.x 的 `password_file` 相对路径相对**启动目录**解析（实测，不是
+conf 目录）——本地起法固定在 `server/` 目录下启动，conf 里写的
+`password_file mosquitto/passwd` 才成立。
 
 ## 本地起法（macOS，无 Docker）
 

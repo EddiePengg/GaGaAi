@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 录音按钮：不带 <size> 的 oval，让它严格贴合 View 边界（44×44dp 就是正圆）
+     带 <size> 的 oval 套在 wrap_content 上会被拉成巨椭圆（2026-09-26 报障根因） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/duck_yellow" />
+    <stroke
+        android:width="2dp"
+        android:color="@color/duck_yellow_dark" />
+</shape>

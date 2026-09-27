@@ -56,12 +56,14 @@ gaga 挂在胸前：**按住右下键说话，松手就发**。转写交给云�
 - 📟 **消息卡 UI**：一问一答一张卡，未读高亮，圆屏上随时回看
 - 🤳 **单手手势**：摇一摇亮屏、翻转静音，全部为"手被占用"设计
 - 🔌 **哑管道架构**：手机 App 只转发不解析，大脑全在服务端——换手机、换 IM、换模型都不动设备
+- ⌚ **多副身躯**：胸前硬件、手表 APK、手机哑管道共享同一颗大脑、同一套协议、同一个飞书群
 
 ## 🏗️ 架构
 
 ```mermaid
 graph LR
     GAGA["🦆 ESP32-S3<br/>录音 · 圆屏 · 按键"]
+    WATCH["⌚ 手表客户端<br/>表冠/侧键发消息"]
     APP["📱 Android App<br/>哑管道"]
     SRV["🧠 Server<br/>信令 · ASR · 会话"]
     FS["💬 飞书群<br/>Hermes Agent"]
@@ -69,6 +71,7 @@ graph LR
 
     GAGA <-- "BLE" --> APP
     APP <-- "MQTT" --> SRV
+    WATCH <-- "MQTT" --> SRV
     SRV <--> FS
     SRV <--> RT
 ```
@@ -76,22 +79,25 @@ graph LR
 三条铁律：
 
 - **音频帧 = 二进制，信令 = JSON 文本帧**，一个字节都不含糊
-- **App 永远哑管道**：只转发不解析，业务逻辑零容忍
+- **手机 App 永远哑管道**：只转发不解析，业务逻辑零容忍（手表客户端是设备侧客户端，与胸前硬件同层，不适用这条，见 ADR-051）
 - **服务端是唯一大脑**：鉴权、ASR、工具分发、日志全在 server/
 
 在家 WiFi 直连；户外 App 代挂 BLE+MQTT，断链即时提示（按键前先预检）。
 
 ## 🚀 快速开始
 
-三个组件，各自目录里有完整 README：
+四个组件，各自目录里有完整 README：
 
 ```bash
 # 服务端（macOS/Linux）：MQTT 桥 + ASR + 飞书接入
 cd server && cp .env.example .env   # 填飞书/火山/百炼密钥
 uv venv --python 3.12 && uv pip install -e . && .venv/bin/gaga-server
 
-# Android 哑管道 App
+# Android 哑管道 App（手机，BLE ↔ MQTT 中转）
 cd app && ./gradlew assembleDebug   # 需 JDK 25 + Gradle 9.x
+
+# 手表客户端（嘎嘎的"第二副身躯"，直连 MQTT）
+cd watch && ./gradlew assembleDebug # 产物 gaga-watch-debug.apk
 
 # 设备固件（PlatformIO + ESP-IDF，微雪官方 BSP）
 cd esp32-idf && pio run -t upload

@@ -11,10 +11,13 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
+#include "host/ble_gap.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+
+#include "compat.h"
 
 static const char* TAG = "gaga.ble";
 
@@ -115,6 +118,7 @@ static int gapEvent(ble_gap_event* event, void* arg) {
 
 // 组装广播参数并开广播：广播包放 Service UUID，名字放扫描响应包
 void GattServer::startAdvertising() {
+    if (connected_) return;  // 看门狗/断连竞态兜底：已连接就不广播（单连接设计）
     // 广播包：flags + 完整 128-bit Service UUID（App 按名称前缀 + UUID 过滤）
     ble_hs_adv_fields fields;
     memset(&fields, 0, sizeof(fields));
@@ -142,6 +146,10 @@ void GattServer::startAdvertising() {
     memset(&params, 0, sizeof(params));
     params.conn_mode = BLE_GAP_CONN_MODE_UND;   // 可连接
     params.disc_mode = BLE_GAP_DISC_MODE_GEN;   // 通用可发现
+    // 广播间隔（省电 2026-09-26）：105~305ms（单位 0.625ms）。手机 1~2s 内
+    // 扫到，广播 radio 占空比大幅下降
+    params.itvl_min = 169;   // 169×0.625 ≈ 106ms
+    params.itvl_max = 488;   // 488×0.625 ≈ 305ms
     const int rc = ble_gap_adv_start(s_addrType, NULL, BLE_HS_FOREVER,
                                      &params, gapEvent, NULL);
     if (rc != 0) {
@@ -161,6 +169,7 @@ static void onSync() {
              addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
     if (s_inst) {
         ble_svc_gap_device_name_set(s_inst->deviceName());
+        s_inst->onHostSync();
         s_inst->startAdvertising();
     }
 }
@@ -269,6 +278,7 @@ bool GattServer::sendJson(const char* json) {
 
 // App → 设备的写入数据转交帧重组器
 void GattServer::handleRxWrite(const uint8_t* data, size_t len) {
+    lastRxMs_ = millis();  // 残帧看门狗基准（host 任务写/app 任务读，32 位免锁）
     decoder_.feed(data, len);
 }
 
@@ -280,6 +290,23 @@ void GattServer::handleConnect(uint16_t connHandle) {
     // TX 特征句柄此刻已被 host 启动回填（begin 时读是 0，见 bug-analysis-0923）
     txValHandle_ = s_txValHandle;
     decoder_.reset();
+    // 连接参数协商（省电 2026-09-26）：30ms 间隔 + latency 0。
+    // 默认 7.5ms 让两颗 radio 每秒醒 133 次；30ms = 33 次（省 4 倍），音频
+    // 上下行（20ms 帧突发，notify/write 每事件可携多包）吞吐实测路径无碍。
+    // ⚠️ latency 不能设 >0：从机跳过连接事件会把下行音频拖到 (1+L)×间隔
+    // 一包，talk 会卡顿——纯挂脖场景的 latency 红利经深睡路径拿，这里不碰。
+    // App 侧若主动协商更激进参数以它为准（update_params 失败仅记日志）。
+    struct ble_gap_upd_params params;
+    params.itvl_min            = 24;    // 30ms（单位 1.25ms）
+    params.itvl_max            = 24;
+    params.latency             = 0;
+    params.supervision_timeout = 300;   // 3s
+    params.min_ce_len          = 0;
+    params.max_ce_len          = 0;
+    const int rc = ble_gap_update_params(connHandle, &params);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "连接参数协商 rc=%d（沿用默认，不影响功能）", rc);
+    }
     ESP_LOGI(TAG, "connected, conn=%u tx_handle=%u", connHandle, txValHandle_);
     if (connCb_) connCb_(true);
 }
@@ -298,6 +325,39 @@ void GattServer::handleDisconnect() {
 void GattServer::handleMtuChange(uint16_t mtu) {
     mtu_ = mtu;
     ESP_LOGI(TAG, "mtu negotiated: %u", mtu_);
+}
+
+// 广播看门狗（appTask 每 10s 自查一次）：
+// 2026-09-26 晚真机实锤（/tmp 串口全程日志）：18:25 正常断连恢复广播后，
+// 18:36 一次链路握手失败（reason 0x3e）触发 NimBLE 内部"Reattempt
+// advertising"，重试失败 rc=3 —— 此后广播**永久静默**：设备应用层一切正常
+// （屏幕/按键/IMU 活着），但对所有手机隐身，App 直连刷 147、系统配对扫描
+// 搜不到，只能重启设备救回。断连回调里的 startAdvertising 救不了这条路径
+// （没有断连事件会来），所以必须周期性主动自查：
+//   未连接 && 广播不在跑 → ble_gap_adv_stop 强停 + 重新 startAdvertising。
+// ble_gap_adv_active/start/stop 都走 host 内部锁，app 任务调是安全的。
+void GattServer::tick() {
+    if (!synced_) return;                       // host 还没 sync：广播操作无意义
+    const uint32_t now = millis();
+    // 残帧看门狗（ADR-060）：字节流中断 >1s 仍停在半个帧里 = 续包在合批/
+    // 重连窗口丢了。帧内续包间隔是 20-50ms 级，1s 足够宽容；不重扫的话
+    // 解码器会一直等幽灵帧的剩余字节，把后续下行全吞掉
+    if (connected_ && decoder_.partial() &&
+        lastRxMs_ != 0 && now - lastRxMs_ > 1000) {
+        ESP_LOGW(TAG, "[framewdt] 残帧超 1s 无续包，丢弃重扫");
+        decoder_.reset();
+    }
+    if (lastAdvCheckMs_ != 0 && now - lastAdvCheckMs_ < 10000) return;
+    lastAdvCheckMs_ = now;
+    if (connected_ || ble_gap_adv_active()) return;
+    ESP_LOGW(TAG, "[advwdt] 未连接但广播已停（NimBLE 重试失败残留），强制重启广播");
+    ble_gap_adv_stop();   // 清掉可能卡半截的广播程序状态，再全新启动
+    startAdvertising();
+}
+
+void GattServer::onHostSync() {
+    synced_ = true;
+    lastAdvCheckMs_ = millis();  // sync 后首查推迟 10s，给初始广播留时间
 }
 
 }  // namespace gaga

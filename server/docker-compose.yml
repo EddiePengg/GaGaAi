@@ -5,7 +5,8 @@ services:
     ports:
       - "1883:1883"
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/mosquitto-docker.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro   # ADR-061 鉴权：mosquitto_passwd 生成（README 公网部署）
 
   server:
     build: .

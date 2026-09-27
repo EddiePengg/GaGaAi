@@ -7,6 +7,8 @@ object Prefs {
     private const val FILE = "gaga_prefs"
     private const val KEY_HOST = "broker_host"
     private const val KEY_PORT = "broker_port"
+    private const val KEY_MQTT_USER = "mqtt_user"
+    private const val KEY_MQTT_PASS = "mqtt_pass"
     private const val KEY_USER_STOPPED = "user_stopped"
     private const val KEY_PAIRED_MAC = "paired_mac"
     private const val KEY_PAIRED_NAME = "paired_name"
@@ -21,6 +23,12 @@ object Prefs {
     var brokerHost: String = ""
         private set
     var brokerPort: Int = DEFAULT_PORT
+        private set
+
+    /** MQTT 鉴权（ADR-061 公网暴露）：空 = 匿名（局域网无鉴权 broker 兼容） */
+    var mqttUser: String = ""
+        private set
+    var mqttPass: String = ""
         private set
 
     /** 用户在 App 里点过"停止服务"：看门狗/开机/任务移除一律不复活，打开 App 清零 */
@@ -59,6 +67,8 @@ object Prefs {
         val p = prefs(context)
         brokerHost = p.getString(KEY_HOST, "") ?: ""
         brokerPort = p.getInt(KEY_PORT, DEFAULT_PORT)
+        mqttUser = p.getString(KEY_MQTT_USER, "") ?: ""
+        mqttPass = p.getString(KEY_MQTT_PASS, "") ?: ""
         userStopped = p.getBoolean(KEY_USER_STOPPED, false)
         pairedMac = p.getString(KEY_PAIRED_MAC, "") ?: ""
         pairedName = p.getString(KEY_PAIRED_NAME, "") ?: ""
@@ -73,12 +83,16 @@ object Prefs {
     }
 
     @Synchronized
-    fun saveBroker(context: Context, host: String, port: Int) {
+    fun saveBroker(context: Context, host: String, port: Int, user: String = "", pass: String = "") {
         brokerHost = host.trim()
         brokerPort = if (port in 1..65535) port else DEFAULT_PORT
+        mqttUser = user.trim()
+        mqttPass = pass
         prefs(context).edit()
             .putString(KEY_HOST, brokerHost)
             .putInt(KEY_PORT, brokerPort)
+            .putString(KEY_MQTT_USER, mqttUser)
+            .putString(KEY_MQTT_PASS, mqttPass)
             .apply()
     }
 

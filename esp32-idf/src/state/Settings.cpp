@@ -25,6 +25,7 @@ static constexpr const char* kKeyARot    = "arot";
 static constexpr const char* kKeyFlip    = "scrflip";
 static constexpr const char* kKeySsid    = "wifi_ssid";
 static constexpr const char* kKeyPass    = "wifi_pass";
+static constexpr const char* kKeyDname   = "dname";
 static constexpr const char* kKeyWifiOn  = "wifi_on";
 static constexpr const char* kKeyTalkPrv = "talk_prv";
 
@@ -47,6 +48,12 @@ void Settings::load() {
     if (nvs_get_i8(h, kKeyARot, &b) == ESP_OK) autoRotateEnabled_ = (b != 0);
     if (nvs_get_i8(h, kKeyFlip, &b) == ESP_OK) screenFlip_ = (b != 0);
     if (nvs_get_i32(h, kKeyTalkPrv, &v) == ESP_OK) setTalkProviderByIndex(static_cast<int>(v));
+    {   // 设备显示名（字符串键；缺失 = 空 = 回退设备 ID）
+        char buf[sizeof(devName_)];
+        size_t len = sizeof(buf);
+        if (nvs_get_str(h, kKeyDname, buf, &len) == ESP_OK)
+            utf8CopyTrunc(devName_, sizeof(devName_), buf);
+    }
     nvs_close(h);
     ESP_LOGI(TAG, "设置已载入：音量 %d 亮度 %d 息屏 %lums 提示音 %s 语音唤醒 %s 字幕 %s 对话引擎 %s",
              volume_, brightness_, static_cast<unsigned long>(screenTimeoutMs_),
@@ -72,6 +79,7 @@ void Settings::save() {
     nvs_set_i8(h, kKeyFlip, screenFlip_ ? 1 : 0);
     nvs_set_i8(h, kKeyWifiOn, wifiEnabled_ ? 1 : 0);
     nvs_set_i32(h, kKeyTalkPrv, talkProviderIdx_);
+    nvs_set_str(h, kKeyDname, devName_);
     const esp_err_t err = nvs_commit(h);
     nvs_close(h);
     if (err != ESP_OK) ESP_LOGW(TAG, "NVS commit 失败：%s", esp_err_to_name(err));
@@ -110,6 +118,23 @@ int Settings::timeoutIndex() const {
 void Settings::setWifi(const char* ssid, const char* pass) {
     utf8CopyTrunc(wifiSsid_, sizeof(wifiSsid_), ssid ? ssid : "");
     utf8CopyTrunc(wifiPass_, sizeof(wifiPass_), pass ? pass : "");
+}
+
+void Settings::setDevName(const char* name) {
+    if (name == nullptr || name[0] == '\0') {
+        devName_[0] = '\0';   // 清空 = 回退设备 ID 署名
+        return;
+    }
+    // 名字要进 JSON 信令字符串：引号/反斜杠/控制字符一律换成空格，
+    // 其余字节原样保留（UTF-8 中文照走，utf8CopyTrunc 再做边界截断）
+    char clean[sizeof(devName_)];
+    size_t o = 0;
+    for (const char* p = name; *p != '\0' && o < sizeof(clean) - 1; p++) {
+        const uint8_t c = static_cast<uint8_t>(*p);
+        clean[o++] = (c == '"' || c == '\\' || c < 0x20) ? ' ' : *p;
+    }
+    clean[o] = '\0';
+    utf8CopyTrunc(devName_, sizeof(devName_), clean);
 }
 
 void Settings::setMqtt(const char* host, int port) {

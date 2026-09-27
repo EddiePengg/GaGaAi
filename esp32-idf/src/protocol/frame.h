@@ -32,8 +32,11 @@ std::vector<std::vector<uint8_t>> encodeFrame(uint8_t type,
                                               uint16_t len,
                                               size_t maxPacketSize);
 
-// 流式重组器：逐个喂入 BLE 包，凑齐一帧后触发 onFrame 回调。
-// 不持有连接状态，断连后请调用 reset() 丢弃半个残帧。
+// 流式重组器：逐字节推进的状态机，凑齐一帧后触发 onFrame 回调。
+// 一次 feed() 可含任意多帧的拼接、也允许一帧横跨多次 feed（App 合批与
+// MTU 切块都不对齐帧边界——2026-09-27 实锤：按包解析时合批写入里首帧后
+// 的字节全部静默丢失，receipt/reply "永远收不到"的根因，ADR-060）。
+// 分片帧（0x80 首包 + 0x00 中间包 + 尾包）的包结构在流内依然成立。
 class FrameDecoder {
 public:
     using FrameCallback = std::function<void(uint8_t type, const uint8_t* payload, uint16_t len)>;
@@ -42,21 +45,30 @@ public:
     void onFrame(FrameCallback cb)  { frameCb_ = std::move(cb); }
     void onError(ErrorCallback cb)  { errorCb_ = std::move(cb); }
 
-    void feed(const uint8_t* packet, size_t len);  // 喂一个 BLE 包，推进重组状态机
-    void reset();                                  // 清空重组状态（断连/残帧自保时调用）
+    void feed(const uint8_t* data, size_t len);  // 喂任意一段字节流，推进状态机
+    void reset();                                // 清空重组状态（断连/残帧自保时调用）
+    bool partial() const { return mode_ != Mode::Scan; }  // 正在半个帧里（卡帧看门狗用）
 
 private:
-    void appendChunk(const uint8_t* data, size_t len);  // 追加一段 payload，凑满则收帧
-    void finishFrame();                                 // 整帧齐了：回调上层并复位
+    void finishFrame();                          // 整帧齐了：回调上层并回扫描态
+
+    enum class Mode : uint8_t {
+        Scan,           // 凑 3 字节包头
+        SinglePayload,  // 单包帧 payload（可跨 feed 边界）
+        SubHeader,      // 分片帧：凑 3 字节子包头
+        SubPayload,     // 分片帧：收本子包 payload
+    };
 
     FrameCallback frameCb_;
     ErrorCallback errorCb_;
 
-    // 重组状态机三元组 + 累积缓冲
-    bool     reassembling_ = false;   // 正在收分片（见了 0x80 首包后为 true）
-    uint8_t  frameType_    = 0;       // 首包记下的真实 type（去掉 0x80 位）
-    uint16_t expectedLen_  = 0;       // 首包宣告的整帧 payload 总长
-    std::vector<uint8_t> buf_;        // 已收的 payload 片段
+    Mode     mode_      = Mode::Scan;
+    uint8_t  hdr_[3]    = {0, 0, 0};  // 逐字节凑包头/子包头
+    uint8_t  hdrGot_    = 0;
+    uint8_t  frameType_ = 0;          // 首包记下的真实 type（去掉 0x80 位）
+    uint32_t remain_    = 0;          // 当前帧还差的 payload 字节数
+    uint32_t subRemain_ = 0;          // 当前子包还差的 payload 字节数
+    std::vector<uint8_t> buf_;        // 已收的 payload
 };
 
 }  // namespace gaga

@@ -162,6 +162,9 @@ object FrameLogger {
             return
         }
         val suffix = if (fragmented) "…（分片）" else ""
+        // 心跳静默（2026-09-26）：服务端每 30s 发一帧 hello_ack 作下行心跳
+        //（App 僵尸连接检测 + 设备持续对时）。纯管道信令，刷终端没有信息量。
+        if (json.optString("type") == "hello_ack") return
         val text: String? = when (json.optString("type")) {
             "rec_start" -> "🎙 开始录音"
             "rec_stop" -> {

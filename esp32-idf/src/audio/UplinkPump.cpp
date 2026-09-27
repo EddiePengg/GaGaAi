@@ -2,6 +2,9 @@
 
 #include <cstring>
 
+#include <cstdio>
+
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 #include "AppContext.h"
@@ -9,8 +12,10 @@
 #include "audio/OpusCodec.h"
 #include "ble/GattServer.h"
 #include "compat.h"
+#include "version.h"
 #include "protocol/frame.h"
 #include "state/AppState.h"
+#include "state/MsgLog.h"
 #include "talk/TalkSession.h"
 #include "ui/Ui.h"
 
@@ -36,6 +41,8 @@ void UplinkPump::beginSession() {
     committed_  = false;
     bufCount_   = 0;
     sessionLive_ = true;
+    linkSawDown_ = false;      // 离线粘性标记：每段录音重新起判
+    if (capLen_ > 0) capMarkSegment();  // 缓存里还有前一条：插分界，补发不粘连
     cuePending_ = true;        // "嘎"挂起：等第一帧麦克风数据真正到手才响
     micFailCycles_ = 0;
     micFailReported_ = false;
@@ -95,6 +102,10 @@ void UplinkPump::flushOneFrame(const int16_t* mono320, bool isTalk) {
         ESP_LOGW(TAG, "[rec] opus 编码失败，丢帧");
         return;
     }
+    // 离线缓存：录音中的每一帧同步进 PSRAM（断链时整段可补发，别白说）
+    if (!isTalk && ctx_->app->recState() == RecState::Recording) {
+        capAppend(pkt, static_cast<uint16_t>(n));
+    }
     uint32_t* rmsSum = isTalk ? &talkRmsSum_ : &recRmsSum_;  // 能量记到对应桶
     *rmsSum += rms;
     // 确认窗内（commit 前）：入缓冲不上行——commit 时整体冲出，按下起零丢失
@@ -149,6 +160,41 @@ void UplinkPump::run() {
     static int16_t mono480[480];  // 下混后单声道（24k 一帧 480 采样为上限）
     static int16_t mono320[OpusEnc::FRAME_SAMPLES];
     for (;;) {
+        watchRecState();
+        const uint32_t now = millis();
+        // 对账查询（2026-09-26；2026-09-27 扩到 Waiting + ADR-059 上限退避）：
+        //   Sending 卡 [10s, 120s]、Waiting 卡 [10s, 5min] 窗口内追询——服务端
+        //   幂等重发，设备 fillAsk/fillReply 对重复信令安全。追赔必须有上限：
+        //   链路僵尸时 10s×∞ 轮询 = 手机灭屏 1h 掉 50% 电的元凶（2026-09-27
+        //   实锤）。间隔按"追没追回东西"自适应：账本版本没动就 +10s 退避到
+        //   30s 封顶，追回了（或来了新卡）立即回满速 10s。
+        if (ctx_->app->recState() == RecState::Idle &&
+            ctx_->app->mqttLink() && ctx_->link != nullptr &&
+            ctx_->link->isConnected() &&
+            (ctx_->log->hasStaleSending(10000, 120000) ||
+             ctx_->log->hasStaleWaiting(10000, 300000)) &&
+            now - lastStatusQueryMs_ >= queryIntervalMs_) {
+            if (lastQueryVersion_ != 0 &&
+                lastQueryVersion_ == ctx_->log->version()) {
+                queryIntervalMs_ = queryIntervalMs_ >= 30000
+                                       ? 30000 : queryIntervalMs_ + 10000;
+            } else {
+                queryIntervalMs_ = 10000;
+            }
+            lastQueryVersion_ = ctx_->log->version();
+            lastStatusQueryMs_ = now;
+            ctx_->link->sendJson("{\"type\":\"rec_status_query\",\"device\":\"" DEVICE_ID "\"}");
+            ESP_LOGI(TAG, "[cache] 回执超时，向服务端对账查询（间隔 %lus）",
+                     static_cast<unsigned long>(queryIntervalMs_ / 1000));
+        }
+        // 待补发 + 链路齐备 + 空闲 + 退避到期 → 整段重放（同步执行：此刻泵没别的事）
+        if (capPending_ && capLen_ > 0 && millis() >= capRetryAtMs_ &&
+            ctx_->app->recState() == RecState::Idle &&
+            ctx_->app->talkState() == TalkState::Off &&
+            ctx_->link != nullptr && ctx_->link->isConnected() &&
+            ctx_->app->mqttLink()) {
+            capReplay();
+        }
         const bool isTalk = (ctx_->app->talkState() == TalkState::Active);
         if (ctx_->app->recState() == RecState::Recording) {
             // ---- M1：16k 原生（姿势 A，零重采样）----
@@ -203,6 +249,197 @@ void UplinkPump::run() {
             vTaskDelay(pdMS_TO_TICKS(20));  // 录音/talk 都没跑：闲着，别空转烧 CPU
         }
     }
+}
+
+// ---- 离线缓存（2026-09-25 用户需求：断链别白说）----
+
+// 追加一帧到 PSRAM 缓存（[len16][payload]）。惰性分配、按 512KB 步进增长，
+// 到 8 分钟上限就封顶（录音照常上行，只是缓存不再增长）。
+void UplinkPump::capAppend(const uint8_t* pkt, uint16_t n) {
+    if (capFull_) return;
+    if (capLen_ + 2 + n > capCap_) {
+        const uint32_t want = (capCap_ == 0) ? (256 * 1024) : (capCap_ + 512 * 1024);
+        if (want > CAP_MAX_BYTES) {
+            capFull_ = true;
+            ESP_LOGW(TAG, "[cache] 缓存到顶（%lus 语音），后续帧只上行不缓存",
+                     static_cast<unsigned long>(CAP_MAX_BYTES / 1024 / 50));
+            return;
+        }
+        uint8_t* p = static_cast<uint8_t*>(
+            heap_caps_realloc(capBuf_, want, MALLOC_CAP_SPIRAM));
+        if (p == nullptr) {
+            capFull_ = true;
+            ESP_LOGW(TAG, "[cache] PSRAM 扩容失败，缓存封顶");
+            return;
+        }
+        capBuf_ = p;
+        capCap_ = want;
+    }
+    capBuf_[capLen_++] = static_cast<uint8_t>(n & 0xFF);
+    capBuf_[capLen_++] = static_cast<uint8_t>((n >> 8) & 0xFF);
+    memcpy(capBuf_ + capLen_, pkt, n);
+    capLen_ += n;
+    capFrames_++;
+}
+
+// 消息分界标记（2026-09-26 三合一 bug）：缓存流里插入 0xFFFF 两字节。
+// 真帧长 ≤256B，0xFFFF 不可能撞车。beginSession 时若缓存非空就插一个
+// ——补发按段各发 rec_start/rec_stop，N 条离线消息 = N 个独立会话。
+void UplinkPump::capMarkSegment() {
+    if (capLen_ + 2 > capCap_) {
+        if (capLen_ + 2 > CAP_MAX_BYTES) {
+            capFull_ = true;
+            return;
+        }
+        const uint32_t want = (capCap_ == 0) ? (256 * 1024) : (capCap_ + 512 * 1024);
+        uint8_t* p = static_cast<uint8_t*>(
+            heap_caps_realloc(capBuf_, want, MALLOC_CAP_SPIRAM));
+        if (p == nullptr) {
+            capFull_ = true;
+            return;
+        }
+        capBuf_ = p;
+        capCap_ = want;
+    }
+    capBuf_[capLen_++] = 0xFF;
+    capBuf_[capLen_++] = 0xFF;
+}
+
+// rec 状态迁移的账本：Sending→Idle（8s 无回执）时判断是否真丢了数据——
+// 全帧送达只是 ASR 慢（正常，receipt 迟早来，清缓存防重复补发）；
+// 丢过帧或 MQTT 断了才是真失败（标记待补发）。→Sent = 送达（同样清）。
+void UplinkPump::watchRecState() {
+    const int nowRec = static_cast<int>(ctx_->app->recState());
+    // 粘性标记（2026-09-26 离线录音）：本段录音期间手机侧 MQTT 断过一次即置位。
+    // 帧被 App 丢弃时设备的 framesDrop_ 不会涨（BLE 层是成功的），只在超时
+    // 时刻看 mqttLink 会漏掉"断过又恢复"的窗口 → 缓存被误清、音频永久丢失。
+    if (!ctx_->app->mqttLink()) linkSawDown_ = true;
+    if (prevRecState_ == static_cast<int>(RecState::Sending) &&
+        nowRec == static_cast<int>(RecState::Idle)) {
+        if (framesDrop_ > 0 || linkSawDown_) {
+            capMarkPending();
+        } else {
+            if (capLen_ > 0) {
+                ESP_LOGI(TAG, "[cache] 全帧送达（ASR 慢而已），清缓存防重复补发");
+            }
+            capClear();   // 服务器已收到全部帧：绝不重复补发
+        }
+    }
+    if (nowRec == static_cast<int>(RecState::Sent) && !capPending_) {
+        capClear();   // 已送达（保留 capBuf_ 分配，下段复用）
+    }
+    prevRecState_ = nowRec;
+}
+
+void UplinkPump::capClear() {
+    capLen_ = 0;
+    capFrames_ = 0;
+    capFull_ = false;
+    capPending_ = false;
+    capDurMs_ = 0;
+    capDoneOff_ = 0;   // 补发续传点一并归零
+}
+
+void UplinkPump::capMarkPending() {
+    if (capLen_ == 0) return;
+    capPending_ = true;
+    capDurMs_ = capFrames_ * 20;   // 20ms/帧
+    ESP_LOGW(TAG, "[cache] 本段录音未送达：缓存 %u 帧 / %lus（capLen=%uKB），链路恢复自动补发",
+             static_cast<unsigned>(capFrames_),
+             static_cast<unsigned long>(capDurMs_ / 1000),
+             static_cast<unsigned>(capLen_ / 1024));
+}
+
+// 整段重放：rec_start → 缓存帧 → rec_stop（模拟一次完整录音上行）。
+// 只在空闲态调用；按直播同速 20ms/帧节流（全速 blast 会打爆 NimBLE 队列，
+// 真机实锤 2026-09-25：失败→从头再来死循环，1.4 万条 notify 刷屏）。
+// 段落语义（2026-09-26 三合一 bug 修复）：缓存流按 0xFFFF 分界标记切成
+// N 条消息，每段独立走 rec_start → 帧 → rec_stop——服务端各自出各自的
+// ASR/飞书消息/receipt，不再合成一句话。capDoneOff_ 记录最近一个已完成
+// rec_stop 的段尾：中途断链/让路后重试从这续，已完成的段不重复发
+//（服务端无去重，重发=群里双消息）。段时长以 帧数×20ms 计（每帧即 20ms
+// 音频，rec_stop 的 duration_ms 只是服务端日志信息，无需精确）。
+void UplinkPump::capReplay() {
+    capPending_ = false;
+    ESP_LOGW(TAG, "[cache] 链路恢复，补发离线录音（%u 帧 / 从 %uB 续）",
+             static_cast<unsigned>(capFrames_),
+             static_cast<unsigned>(capDoneOff_));
+    ctx_->ui->showNote("补发离线录音…");
+    constexpr uint16_t kSegMark = 0xFFFF;
+    bool inSession = false;
+    uint32_t segFrames = 0, totalSent = 0, segs = 0;
+    uint32_t off = capDoneOff_;
+    while (off + 2 <= capLen_) {
+        // 用户开始新录音：补发让路（缓存未清，录音结束退避后继续）
+        if (ctx_->app->recState() == RecState::Recording) {
+            capPending_ = true;
+            capRetryAtMs_ = millis() + 10000;
+            return;
+        }
+        const uint16_t n = static_cast<uint16_t>(capBuf_[off] | (capBuf_[off + 1] << 8));
+        off += 2;
+        if (n == kSegMark) {
+            if (inSession) {
+                if (!sendSegStop(segFrames)) { bailReplay(); return; }
+                segs++;
+            }
+            inSession = false;
+            capDoneOff_ = off;
+            continue;
+        }
+        if (off + n > capLen_) break;
+        if (!inSession) {
+            // 补发段的 rec_start 同样带 name（ADR-064）：离线补发的消息也要正确署名
+            char rs[160];
+            const char* nm = ctx_->settings->devName();
+            if (nm[0] != '\0')
+                snprintf(rs, sizeof(rs),
+                         "{\"type\":\"rec_start\",\"device\":\"" DEVICE_ID "\",\"name\":\"%s\"}", nm);
+            else
+                snprintf(rs, sizeof(rs),
+                         "{\"type\":\"rec_start\",\"device\":\"" DEVICE_ID "\"}");
+            if (!ctx_->link->sendJson(rs)) { bailReplay(); return; }
+            inSession = true;
+            segFrames = 0;
+        }
+        if (!ctx_->link->isConnected() ||
+            !ctx_->link->sendFrame(FRAME_TYPE_OPUS, capBuf_ + off, n)) {
+            bailReplay();   // 中途又断：缓存未清，恢复待补发
+            return;
+        }
+        segFrames++;
+        totalSent++;
+        off += n;
+        vTaskDelay(pdMS_TO_TICKS(18));   // 与直播同速，队列不爆
+    }
+    if (inSession) {
+        if (!sendSegStop(segFrames)) { bailReplay(); return; }
+        segs++;
+        capDoneOff_ = off;
+    }
+    ESP_LOGW(TAG, "[cache] 补发完成：本轮 %u 段 / %u 帧",
+             static_cast<unsigned>(segs), static_cast<unsigned>(totalSent));
+    ctx_->ui->showNote("✓ 离线录音已补发");
+    // 失败卡复活：红 → 黄（Sending）。补发已送达服务端正在识别，随后的
+    // receipt（ASR 文本）经 fillAsk 自然填回卡片——此前卡片非 Sending 态，
+    // ASR 结果被丢弃 = 用户看到的"空卡"（2026-09-26 修复）
+    if (ctx_->log->failToSending() >= 0) ctx_->ui->onLogChanged();
+    capClear();
+}
+
+// 段收尾信令；false = 链路断了（调用方走退避重试）
+bool UplinkPump::sendSegStop(uint32_t frames) {
+    char stop[64];
+    snprintf(stop, sizeof(stop),
+             "{\"type\":\"rec_stop\",\"duration_ms\":%lu,\"device\":\"%s\"}",
+             static_cast<unsigned long>(frames * 20), DEVICE_ID);
+    return ctx_->link->sendJson(stop);
+}
+
+// 补发中止的统一出口：保住缓存与续传点，10s 后再试
+void UplinkPump::bailReplay() {
+    capPending_ = true;
+    capRetryAtMs_ = millis() + 10000;
 }
 
 }  // namespace gaga

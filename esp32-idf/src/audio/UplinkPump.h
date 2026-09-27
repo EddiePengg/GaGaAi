@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "state/AppState.h"
+
 // 上行泵（原 main.cpp 的 uplinkTask + flushOneFrame + micReadCycle，重构搬出）：
 // 专用大栈任务，一条泵服务两种互斥状态（AppState 保证互斥）：
 //   M1 录音：mic @16k 双声道 → 下混 320/20ms → Opus → 帧（确认窗帧入缓冲，
@@ -19,6 +21,8 @@ public:
     // 确认窗帧缓冲容量：64 × 20ms = 1.28s（覆盖确认窗绰绰有余）
     static constexpr int REC_BUF_PKTS   = 64;
     static constexpr int REC_BUF_PKT_SZ = 64;   // Opus 包实测 8~50B
+    // 离线缓存上限：≈2.6MB（约 8 分钟语音，50 帧/s × ~130B/帧）
+    static constexpr uint32_t CAP_MAX_BYTES = 2600 * 1024;
 
     void begin(AppContext* ctx);  // 建 PSRAM 大栈任务（绑 core1 最高优先级）
 
@@ -40,6 +44,20 @@ private:
     void run();               // 泵主循环（rec / 收尾统计 / talk / 空闲睡）
     bool micReadCycle(int16_t* monoOut, int framesPerCh);
     void flushOneFrame(const int16_t* mono320, bool isTalk);
+    // ---- 离线缓存（2026-09-25 用户需求：断链别白说）----
+    // 录音中每帧同步进 PSRAM（[len16][payload] 序列，段间插 0xFFFF 分界：
+    // 多条离线消息各自独立，补发不粘连——2026-09-26 三合一 bug 修复）。
+    // 回收规则：rec→Sent（服务端回执）= 送达，清；Sending→Idle（发送失败
+    // 或本段见过断链）= 标记待补发；链路恢复按段重放（断点续传，已完成
+    // 段不重发）。容量上限 ≈2.6MB（约 8 分钟语音），到顶停止追加但录音照常。
+    void watchRecState();
+    void capAppend(const uint8_t* pkt, uint16_t n);
+    void capMarkSegment();   // 缓存流插 0xFFFF 分界：多条离线消息不粘连
+    void capClear();
+    void capMarkPending();
+    void capReplay();
+    bool sendSegStop(uint32_t frames);  // 段收尾 rec_stop（false=链路断）
+    void bailReplay();                  // 补发中止：保缓存/续传点，10s 退避
 
     AppContext* ctx_ = nullptr;
 
@@ -47,6 +65,7 @@ private:
     bool     micDebug_   = false;  // 每 ~0.5s 打 L/R RMS（采集全零排查）
     volatile bool committed_ = false;   // 确认窗是否已过（Recorder commit 置位）
     volatile bool sessionLive_ = false; // 本段会话统计窗口（beginSession 开、stop 清）
+    volatile bool linkSawDown_ = false; // 本段录音期间手机侧 MQTT 断过（离线补发判定）
     bool     flushTail_ = false;   // 停录后打一行收尾统计的一次性旗子
     bool     cuePending_ = false;  // "嘎"提示待播：第一帧麦克风数据真正到手时才响
     int      micFailCycles_ = 0;   // 录音中 mic 连续读取失败周期（麦克风故障判定）
@@ -58,6 +77,21 @@ private:
     int      bufCount_ = 0;
     uint32_t framesSent_ = 0;      // 录音统计：成功上行帧数
     uint32_t framesDrop_ = 0;      // 丢弃帧数（未连接/发送失败/缓冲溢出）
+
+    // ---- 离线缓存状态 ----
+    uint8_t* capBuf_ = nullptr;    // PSRAM 缓存（惰性分配）
+    uint32_t capLen_ = 0;          // 已缓存字节数
+    uint32_t capCap_ = 0;          // 已分配容量
+    uint32_t capFrames_ = 0;       // 已缓存帧数（20ms/帧）
+    uint32_t capDurMs_ = 0;        // 待补发段时长
+    bool     capFull_ = false;     // 到上限：停止追加，录音照常
+    bool     capPending_ = false;  // 有整段录音待补发
+    uint32_t capRetryAtMs_ = 0;    // 补发失败的退避时刻（10s 后再试）
+    uint32_t capDoneOff_ = 0;      // 补发续传点：最近一个已完成 rec_stop 的段尾
+    uint32_t lastStatusQueryMs_ = 0;  // 上次对账查询时刻（节流）
+    uint32_t queryIntervalMs_  = 10000; // 对账间隔（追不回时退避，10s→30s）
+    uint32_t lastQueryVersion_ = 0;    // 上次查询时的账本版本（没动=没追回→退避）
+    int      prevRecState_ = static_cast<int>(RecState::Idle);
     uint32_t recRmsSum_  = 0;      // 能量累计（~0.5s 一行平均 RMS 当"活着"证据）
     uint32_t talkFrames_ = 0;
     uint32_t talkRmsSum_ = 0;

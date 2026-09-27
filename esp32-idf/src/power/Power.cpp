@@ -7,6 +7,7 @@
 
 #include "compat.h"
 #include "input/PwrKey.h"
+#include "input/Rtc.h"
 #include "state/AppState.h"
 
 namespace gaga {
@@ -33,11 +34,12 @@ void Power::begin(AppState* app) {
 
 void Power::tick(bool bleConnected) {
     if (app_ == nullptr) return;
-    // 深睡条件：息屏 + 没连手机 + 没在充电 + 空闲（不录音/不发送）
-    const bool canSleep =
-        app_->screen() == ScreenState::Off && !bleConnected &&
+    // 深睡前提：息屏 + 空闲（不录音/不发送）。"未连手机"不再是硬门禁——
+    // 夜间窗口内连着也睡（见 Power.h 注释，凌晨电老鼠修复）
+    const bool idleBase =
+        app_->screen() == ScreenState::Off &&
         app_->recState() != RecState::Recording && app_->recState() != RecState::Sending;
-    if (!canSleep) {
+    if (!idleBase) {
         idleSinceMs_ = 0;
         return;
     }
@@ -54,9 +56,22 @@ void Power::tick(bool bleConnected) {
         idleSinceMs_ = now;
         return;
     }
-    if (now - idleSinceMs_ >= IDLE_TIMEOUT_MS) {
-        ESP_LOGI(TAG, "挂机 %lumin（息屏+未连+未充），进深睡",
-                 static_cast<unsigned long>(IDLE_TIMEOUT_MS / 60000));
+    const uint32_t elapsed = now - idleSinceMs_;
+    if (!bleConnected) {
+        if (elapsed >= IDLE_TIMEOUT_MS) {
+            ESP_LOGI(TAG, "挂机 %lumin（息屏+未连+未充），进深睡",
+                     static_cast<unsigned long>(IDLE_TIMEOUT_MS / 60000));
+            enterDeepSleep();
+        }
+        return;
+    }
+    // 蓝牙连着：只在夜间窗口加睡（白天连着 = 随时可能来消息，不睡）
+    RtcTime t{};
+    if (rtcGetTime(&t) && t.valid &&
+        t.hour >= NIGHT_BEGIN_HOUR && t.hour < NIGHT_END_HOUR &&
+        elapsed >= NIGHT_CONNECTED_IDLE_MS) {
+        ESP_LOGI(TAG, "夜间挂机 %lumin（息屏+连着+未充 %02d 点），连着也进深睡",
+                 static_cast<unsigned long>(NIGHT_CONNECTED_IDLE_MS / 60000), t.hour);
         enterDeepSleep();
     }
 }

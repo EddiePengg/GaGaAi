@@ -11,8 +11,8 @@ android {
         applicationId = "com.gagaai.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.4.2"
+        versionCode = 39
+        versionName = "0.4.14"
     }
 
     packaging {

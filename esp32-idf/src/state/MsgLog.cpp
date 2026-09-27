@@ -84,7 +84,10 @@ int MsgLog::fillAsk(const char* text, const char* msgId) {
             return i;
         }
     }
-    return -1;  // 无占位卡（乱序/重启后的迟到 receipt）：丢弃
+    // 无占位卡可配对（乱序/重复/重启后的迟到 receipt）→ 丢弃。
+    // 2026-09-26 排查"永远识别中"加日志：原先纯静默，丢没丢无从查起
+    ESP_LOGW(TAG, "[msglog] receipt 无 Sending 卡可配对，丢弃");
+    return -1;
 }
 
 // reply（FIFO）：找第一张 Waiting 卡填回复，Waiting → Replied
@@ -116,7 +119,10 @@ int MsgLog::fillReply(const char* text, const char* replyTo) {
             return i;
         }
     }
-    return -1;  // 无等待中的卡：孤立回复丢弃（不做无上下文卡）
+    // 无等待中的卡：孤立回复丢弃（不做无上下文卡）。补日志——reply 丢失与
+    // receipt 丢失是"永远没回复"的同一族断点，静默丢弃在排查时无从下手
+    ESP_LOGW(TAG, "[msglog] reply 无 Waiting 卡可配对（孤立/迟到），丢弃");
+    return -1;
 }
 
 // error（FIFO）：找第一张 Sending 卡置 Failed，原因塞进 reply 槽给 UI 显示
@@ -134,6 +140,50 @@ int MsgLog::failSending(const char* reason) {
     return -1;
 }
 
+// 离线补发完成：最近一条 Failed 卡转回 Sending（黄条"识别中…"）。
+// 补发已送达服务端，ASR 正在跑——随后的 receipt（ASR 文本+msg_id）经
+// fillAsk 自然填回 ask（此前 ASR 结果因卡片非 Sending 态被丢弃 = 用户看到
+// 的"空卡"）。之后 Hermes 回复经 fillReply 正常点亮。
+int MsgLog::failToSending() {
+    if (msgs_ == nullptr) return -1;
+    for (int i = 0; i < count_; i++) {
+        if (msgs_[i].state == MsgState::Failed) {
+            msgs_[i].state = MsgState::Sending;
+            version_++;
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool MsgLog::hasStaleSending(uint32_t minAgeMs) const {
+    return hasStaleSending(minAgeMs, 0xFFFFFFFFu);
+}
+
+bool MsgLog::hasStaleSending(uint32_t minAgeMs, uint32_t maxAgeMs) const {
+    if (msgs_ == nullptr) return false;
+    const uint32_t now = millis();
+    for (int i = 0; i < count_; i++) {
+        if (msgs_[i].state == MsgState::Sending) {
+            const uint32_t age = now - msgs_[i].createdAtMs;
+            if (age >= minAgeMs && age <= maxAgeMs) return true;
+        }
+    }
+    return false;
+}
+
+bool MsgLog::hasStaleWaiting(uint32_t minAgeMs, uint32_t maxAgeMs) const {
+    if (msgs_ == nullptr) return false;
+    const uint32_t now = millis();
+    for (int i = 0; i < count_; i++) {
+        if (msgs_[i].state == MsgState::Waiting) {
+            const uint32_t age = now - msgs_[i].createdAtMs;
+            if (age >= minAgeMs && age <= maxAgeMs) return true;
+        }
+    }
+    return false;
+}
+
 // 按稳定 id 找卡（详情页认卡用；头部插卡/顶卡下标漂移也不串卡）
 const Msg* MsgLog::findById(uint32_t id) const {
     if (id == 0 || msgs_ == nullptr) return nullptr;
@@ -147,6 +197,12 @@ const Msg* MsgLog::findById(uint32_t id) const {
 bool MsgLog::softTimedOut(const Msg& m, uint32_t nowMs) {
     return m.state == MsgState::Waiting &&
            (nowMs - m.createdAtMs) >= REPLY_SOFT_TIMEOUT_MS;
+}
+
+// 识别软超时：Sending 且超 60s——同上只改占位文案（"永远识别中"的诚实化）
+bool MsgLog::sendingTimedOut(const Msg& m, uint32_t nowMs) {
+    return m.state == MsgState::Sending &&
+           (nowMs - m.createdAtMs) >= SENDING_SOFT_TIMEOUT_MS;
 }
 
 }  // namespace gaga

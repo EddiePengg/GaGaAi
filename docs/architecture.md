@@ -31,7 +31,7 @@
 ## 数据流：里程碑 1（语音发飞书）
 
 ```
-按住右下键说话 → 松开 → 设备 Opus 编码 → BLE 上行
+按下右下键立即开录（摇一摇同权）→ 再按一下收尾（<300ms 丢弃）→ 设备 Opus 编码 → BLE 上行
 → App 原样转发 MQTT gaga/up → 服务器重组帧、解 Opus
 → ASR 转文字 → channel.send_text（飞书官方 API）→ Hermes 收到
 → 服务器 MQTT gaga/down 发 {"type":"receipt"}

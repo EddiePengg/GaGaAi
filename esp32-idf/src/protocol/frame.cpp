@@ -60,75 +60,109 @@ std::vector<std::vector<uint8_t>> encodeFrame(uint8_t type,
     return packets;
 }
 
-// 喂一个 BLE 包，按包头 type/len 推进重组状态机
-void FrameDecoder::feed(const uint8_t* packet, size_t len) {
-    if (packet == nullptr || len < FRAME_HEADER_SIZE) {
-        if (errorCb_) errorCb_("packet too short");
-        return;
-    }
-
-    const uint8_t  typeField = packet[0];
-    const uint16_t lenField  = (static_cast<uint16_t>(packet[1]) << 8) | packet[2];
-    const uint8_t* body      = packet + FRAME_HEADER_SIZE;
-    const size_t   bodyLen   = len - FRAME_HEADER_SIZE;
-
-    if (typeField & FRAME_FLAG_MORE) {
-        // 首包：len 字段是整帧 payload 总长度
-        reassembling_ = true;
-        frameType_    = typeField & 0x7F;
-        expectedLen_  = lenField;
-        buf_.clear();
-        buf_.reserve(expectedLen_);
-        appendChunk(body, bodyLen);
-        return;
-    }
-
-    if (typeField == FRAME_TYPE_CONTINUATION) {
-        if (!reassembling_) {  // 没有首包却来了中间包：半截残帧，丢弃
-            if (errorCb_) errorCb_("orphan continuation");
-            return;
+// 喂一段字节流：写入边界对协议无意义（App 合批/MTU 切块不对齐帧边界）。
+// 状态机逐字节推进：Scan 凑包头 → 单包帧直接收 payload；分片帧先收 0x80
+// 首包，再按子包头（0x00 中间/原 type 尾包）逐段收，凑满 expectedLen 收帧。
+// 一次 feed 里解出任意多帧；一帧也可以横跨任意多次 feed。
+void FrameDecoder::feed(const uint8_t* data, size_t len) {
+    if (data == nullptr) return;
+    size_t i = 0;
+    while (i < len) {
+        switch (mode_) {
+        case Mode::Scan: {  // 凑 3 字节包头
+            hdr_[hdrGot_++] = data[i++];
+            if (hdrGot_ < FRAME_HEADER_SIZE) break;
+            hdrGot_ = 0;
+            const uint8_t  t = hdr_[0];
+            const uint16_t n = (static_cast<uint16_t>(hdr_[1]) << 8) | hdr_[2];
+            if (t & FRAME_FLAG_MORE) {  // 分片首包：n = 整帧 payload 总长
+                frameType_ = t & 0x7F;
+                remain_    = n;
+                buf_.clear();
+                buf_.reserve(n);
+                mode_ = Mode::SubHeader;
+            } else if (t == FRAME_TYPE_CONTINUATION) {
+                // 流中间孤儿的续包头：链路丢过首包，吞掉这 3 字节继续扫
+                if (errorCb_) errorCb_("orphan continuation");
+            } else {  // 单包完整帧：n = payload 长度
+                frameType_ = t;
+                remain_    = n;
+                buf_.clear();
+                buf_.reserve(n);
+                mode_ = (n == 0) ? Mode::Scan : Mode::SinglePayload;
+                if (n == 0) finishFrame();
+            }
+            break;
         }
-        appendChunk(body, gmin(bodyLen, static_cast<size_t>(lenField)));
-        return;
-    }
-
-    if (reassembling_) {
-        // 尾包
-        appendChunk(body, gmin(bodyLen, static_cast<size_t>(lenField)));
-    } else {
-        // 单包完整帧
-        if (lenField > bodyLen) {
-            if (errorCb_) errorCb_("payload truncated");
-            return;
+        case Mode::SinglePayload: {  // 收单包帧 payload（可跨 feed 边界）
+            const size_t n = gmin(len - i, remain_);
+            buf_.insert(buf_.end(), data + i, data + i + n);
+            i += n;
+            remain_ -= n;
+            if (remain_ == 0) {
+                finishFrame();
+                mode_ = Mode::Scan;
+            }
+            break;
         }
-        if (frameCb_) frameCb_(typeField, body, lenField);
+        case Mode::SubHeader: {  // 分片帧：凑 3 字节子包头
+            hdr_[hdrGot_++] = data[i++];
+            if (hdrGot_ < FRAME_HEADER_SIZE) break;
+            hdrGot_ = 0;
+            const uint8_t  t = hdr_[0];
+            const uint16_t n = (static_cast<uint16_t>(hdr_[1]) << 8) | hdr_[2];
+            if (t == FRAME_TYPE_CONTINUATION || t == frameType_) {
+                if (n > remain_) {  // 子包宣告超首包总长：流已脏，自保重扫
+                    if (errorCb_) errorCb_("frame overflow");
+                    reset();
+                    break;
+                }
+                subRemain_ = n;
+                mode_ = Mode::SubPayload;
+            } else {
+                if (errorCb_) errorCb_("bad sub header");
+                reset();
+                break;
+            }
+            break;
+        }
+        case Mode::SubPayload: {  // 收本子包 payload
+            const size_t n = gmin(len - i, subRemain_);
+            buf_.insert(buf_.end(), data + i, data + i + n);
+            i += n;
+            subRemain_ -= n;
+            remain_    -= n;
+            if (subRemain_ == 0) mode_ = Mode::SubHeader;
+            if (remain_ == 0) {
+                finishFrame();
+                mode_ = Mode::Scan;
+            }
+            break;
+        }
+        }
     }
 }
 
-// 追加一段 payload；累计到 expectedLen_ 就收帧
-void FrameDecoder::appendChunk(const uint8_t* data, size_t len) {
-    if (buf_.size() + len > expectedLen_) {
-        // 超过首包宣告的总长度：对端不按协议来，丢弃残帧自保
-        if (errorCb_) errorCb_("frame overflow");
-        reset();
-        return;
-    }
-    buf_.insert(buf_.end(), data, data + len);
-    if (buf_.size() >= expectedLen_) finishFrame();
-}
-
-// 整帧凑齐：回调上层，然后复位状态机
+// 整帧凑齐：回调上层（状态回 Scan 由调用点负责/这里不动 mode_）
 void FrameDecoder::finishFrame() {
-    if (frameCb_) frameCb_(frameType_, buf_.data(), static_cast<uint16_t>(buf_.size()));
-    reset();
+    if (frameCb_) frameCb_(frameType_, buf_.data(),
+                           static_cast<uint16_t>(buf_.size()));
+    buf_.clear();
+    buf_.shrink_to_fit();
+    frameType_ = 0;
+    remain_    = 0;
+    subRemain_ = 0;
 }
 
 // 清空重组状态机（断连或残帧自保时调用）
 void FrameDecoder::reset() {
-    reassembling_ = false;
-    frameType_    = 0;
-    expectedLen_  = 0;
+    mode_      = Mode::Scan;
+    hdrGot_    = 0;
+    frameType_ = 0;
+    remain_    = 0;
+    subRemain_ = 0;
     buf_.clear();
+    buf_.shrink_to_fit();
 }
 
 }  // namespace gaga

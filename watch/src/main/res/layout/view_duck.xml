@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ② 嘎嘎页（首页左滑）：真鸭子图整只显示
+     用 docs/assets/icons/gaga-icon.png（1254x1254 → 560px 下采样），
+     页面底色取原图四角均值 #E6E3DE，鸭子图无缝融进圆屏（2026-09-26 用户
+     报障："谁让你直接画了的"——此前是 DuckView 程序化自绘，已废除） -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#E6E3DE">
+
+    <!-- 整只鸭子居中：fitCenter 保证身子不被圆屏裁掉 -->
+    <ImageView
+        android:id="@+id/imgDuck"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_margin="26dp"
+        android:adjustViewBounds="true"
+        android:contentDescription="嘎嘎"
+        android:scaleType="fitCenter"
+        android:src="@drawable/img_duck" />
+
+    <!-- 大字状态，压在鸭子脚下方，深色字在浅底上 -->
+    <TextView
+        android:id="@+id/tvDuckState"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="30dp"
+        android:background="@drawable/bg_state_badge"
+        android:paddingStart="12dp"
+        android:paddingTop="5dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="5dp"
+        android:text="@string/state_idle"
+        android:textColor="@color/ink"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+</FrameLayout>

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 // 应用状态机（docs/hardware.md 按键分工 + ADR-016 交互 v2）
 //   屏幕：右上键单击亮屏；SCREEN_TIMEOUT_MS 无操作自动息屏（录音/发送中不息屏）
@@ -69,7 +70,9 @@ public:
     uint32_t lastDurationMs() const { return durationMs_; }
 
     void onRecStateChange(RecCallback cb)    { recCb_ = std::move(cb); }
-    void onScreenChange(ScreenCallback cb)   { screenCb_ = std::move(cb); }
+    // 屏幕回调支持多订阅（2026-09-26 事故修复：单槽位下后注册的 IMU 功耗
+    // 切换覆盖了 Ui 的面板息屏回调 → 面板 DISPOFF 永不发出 = "永不熄屏"）
+    void onScreenChange(ScreenCallback cb)   { screenCbs_.push_back(std::move(cb)); }
     void onTalkStateChange(TalkCallback cb)  { talkCb_ = std::move(cb); }
 
 private:
@@ -88,7 +91,7 @@ private:
     bool        mqttLink_   = true;   // 手机侧 MQTT 链路（App 推送，ADR-038）
 
     RecCallback    recCb_;
-    ScreenCallback screenCb_;
+    std::vector<ScreenCallback> screenCbs_;   // 多订阅：UI 息屏 / 功耗档 / …
     TalkCallback   talkCb_;
 };
 

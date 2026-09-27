@@ -73,6 +73,9 @@ class BleManager(
 
         /** 连续看门狗重启这么多次仍无结果，退回带退避的完整重扫循环 */
         private const val WATCHDOG_LIMIT = 3
+
+        /** 下行合批冲刷时限：攒不满 MTU 也最多等这么久（音频延迟上限 +12ms） */
+        private const val BATCH_FLUSH_MS = 12L
     }
 
     private enum class Phase { IDLE, SCANNING, CONNECTING, READY }
@@ -98,9 +101,16 @@ class BleManager(
     @Volatile
     private var currentMtu = DEFAULT_MTU
 
+    // 后台守株待兔连接（2026-09-27）：autoConnect=true 挂在系统蓝牙栈上，
+    // 设备一出现栈自己连——ColorOS 限流不了它，App 后台也生效。设备重启/
+    // 广播消失后手机后台扫不到、必须手动开 App 的根治方案。
+    private var bgGatt: BluetoothGatt? = null
+
     // 下行写队列：BLE 写必须串行，等 onCharacteristicWrite 后再发下一包
     private val writeQueue = ArrayDeque<ByteArray>()
     private var writeInFlight = false
+    private var writeInFlightAt = 0L      // 本次写入起跳时刻（守卫判卡死用）
+    private var writeGuardJob: Job? = null
 
     // region 生命周期
 
@@ -168,10 +178,12 @@ class BleManager(
         unregisterBluetoothStateReceiver()
         stopScan()
         closeGatt()
+        closeBgGatt()
         synchronized(writeQueue) {
             writeQueue.clear()
             writeInFlight = false
         }
+        writeGuardJob?.cancel()
         phase = Phase.IDLE
         BridgeState.setBleStatus("Stopped")
     }
@@ -200,13 +212,60 @@ class BleManager(
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
         try {
-            scanner.startScan(listOf(filter), settings, scanCallback)
+            // 每次全新 callback 对象：部分机型（实测 ColorOS）复用同一 callback
+            // 的扫描会话在后台被系统静默降级后不再回调，重建会话才恢复
+            stopScan()
+            activeScanCallback = object : ScanCallback() {
+                override fun onScanResult(callbackType: Int, result: ScanResult) {
+                    scanCallback.onScanResult(callbackType, result)
+                }
+            }
+            scanner.startScan(listOf(filter), settings, activeScanCallback)
             armWatchdog()
         } catch (e: Exception) {
             BridgeState.setBleStatus("Scan start failed: ${e.message}")
             scheduleRetry()
         }
     }
+
+    // App 回前台（Activity.onResume）：后台扫描被 ColorOS 限流是"卡在扫描中
+    // 必须手动 Stop/Start"的根因——回前台立即重建扫描会话（前台不受限流），
+    // 用户无需任何手动操作。仅在"正在扫/正等重试"时动作，已连接则不动。
+    /** BLE 是否已就绪（已连接 + 通道可用）——伴生 kick 等调用方分流日志用。 */
+    fun isReady(): Boolean = phase == Phase.READY
+
+    fun onAppForeground() {
+        if (!running) return
+        if (phase == Phase.SCANNING) {
+            BridgeState.log("App 前台：重建扫描会话（绕过后台限流）")
+            retryCount = 0
+            watchdogCount = 0
+            startScan()
+        } else if (phase == Phase.IDLE) {
+            // 正在退避等待：提前触发重连
+            retryJob?.cancel()
+            retryJob = scope.launch {
+                delay(300)
+                if (running) connectPreferDirect()
+            }
+        }
+    }
+
+    // 伴生设备出现（系统 CDM 事件）：设备已在广播，跳过退避立即重连。
+    // 已连接/正在连接则不动。
+    fun kickReconnect() {
+        if (!running || phase == Phase.READY || phase == Phase.CONNECTING) return
+        BridgeState.log("Companion kick: 立即重连（跳过退避）")
+        retryJob?.cancel()
+        retryCount = 0
+        directAttempts = 0
+        scope.launch {
+            delay(200)
+            if (running) connectPreferDirect()
+        }
+    }
+
+    private var activeScanCallback: ScanCallback? = null
 
     // region 扫描看门狗
 
@@ -230,6 +289,7 @@ class BleManager(
             // 连续重启扫描也没结果：走一次带退避的完整重扫循环
             watchdogCount = 0
             BridgeState.log("⏱ Scan watchdog: no result ${WATCHDOG_LIMIT} times, backing off")
+            armBackgroundConnect()   // 后台扫描被限流的铁证：挂栈级守株待兔
             phase = Phase.IDLE
             scheduleRetry()
         } else {
@@ -240,9 +300,13 @@ class BleManager(
 
     private fun stopScan() {
         try {
+            activeScanCallback?.let {
+                bluetoothManager?.adapter?.bluetoothLeScanner?.stopScan(it)
+            }
             bluetoothManager?.adapter?.bluetoothLeScanner?.stopScan(scanCallback)
         } catch (_: Exception) {
         }
+        activeScanCallback = null
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -322,7 +386,33 @@ class BleManager(
     private fun connect(device: BluetoothDevice) {
         phase = Phase.CONNECTING
         closeGatt()
+        closeBgGatt()   // 前台快路径连上在即，守株待兔退役（防双连接）
         gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+    }
+
+    /** 挂后台守株待兔（幂等）：只在扫描看门狗退避（后台扫描已被限流）时挂。 */
+    fun armBackgroundConnect() {
+        if (!running || phase == Phase.READY || bgGatt != null) return
+        Prefs.ensureLoaded(context)
+        val mac = Prefs.pairedMac
+        if (mac.isEmpty()) return
+        try {
+            val device = bluetoothManager?.adapter?.getRemoteDevice(mac) ?: return
+            bgGatt = device.connectGatt(context, true, gattCallback,
+                                         BluetoothDevice.TRANSPORT_LE)
+            BridgeState.log("👻 后台守株待兔已挂（设备出现即自动连）")
+        } catch (e: Exception) {
+            BridgeState.log("后台守株待兔挂载失败: ${e.message}")
+        }
+    }
+
+    private fun closeBgGatt() {
+        try {
+            bgGatt?.disconnect()
+            bgGatt?.close()
+        } catch (_: Exception) {
+        }
+        bgGatt = null
     }
 
     private fun closeGatt() {
@@ -338,6 +428,12 @@ class BleManager(
             writeQueue.clear()
             writeInFlight = false
         }
+        writeGuardJob?.cancel()
+        synchronized(batchBuf) {
+            batchBuf.reset()
+            batchJob?.cancel()
+            batchJob = null
+        }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -345,6 +441,17 @@ class BleManager(
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
+                    if (g !== gatt && g === bgGatt) {
+                        // 守株待兔命中：后台连接先到 → 晋升为主连接，
+                        // 收掉前台扫描/重试/旧主连接
+                        BridgeState.log("👻 后台守株待兔命中，晋升主连接")
+                        try { gatt?.disconnect(); gatt?.close() } catch (_: Exception) {}
+                        gatt = g
+                        bgGatt = null
+                        cancelWatchdog()
+                        stopScan()
+                        retryJob?.cancel()
+                    }
                     BridgeState.setBleStatus("Connected, discovering services…")
                     if (!g.discoverServices()) {
                         BridgeState.setBleStatus("Failed to start service discovery")
@@ -473,21 +580,88 @@ class BleManager(
 
     // region 下行写入
 
-    /** 服务器下行字节：按当前 MTU-3 分包，串行写入 RX characteristic。 */
+    // 下行合批（2026-09-26 实时音频延迟根治）：服务器的 ogg 分片小（~100-300B）
+    // 而一次 BLE 写一轮连接事件——ColorOS 50ms 间隔下逐片写只有 ~20 片/s，
+    // 音频到达速率 > 写出速率 → 积压 → "文字秒到、音频等半分钟"。
+    // 攒到 ~MTU 或 12ms 即冲刷：设备端 FrameDecoder 是流式重组器，
+    // 一次写入含多帧拼接天然支持（feed 逐字节推进，完整帧逐个回调）。
+    private val batchBuf = java.io.ByteArrayOutputStream()
+    private var batchDeadline = 0L
+    private var batchJob: Job? = null
+
+    /** 服务器下行字节：先进合批缓冲，攒满/到期再按安全块写入。 */
     fun writeDownlink(data: ByteArray) {
         if (phase != Phase.READY || rxCharacteristic == null) {
             BridgeState.log("BLE not ready, dropped ${data.size}B downlink")
             return
         }
-        val chunkSize = (currentMtu - 3).coerceAtLeast(20)
-        val chunks = mutableListOf<ByteArray>()
+        // 写入块封顶 240B（2026-09-27 实锤）：设备侧协商 MTU=517，但 ColorOS
+        // 的栈拒绝 514B 写（IllegalArgumentException 确定性复现，OEM 内部
+        // 上限与协商值不一致）。240 是所有 OEM 都安全的经典值；音频下行
+        // 吞吐按 240B/写 @20ms 节奏仍远超实时
+        val chunkSize = (currentMtu - 3).coerceAtLeast(20).coerceAtMost(240)
+        synchronized(batchBuf) {
+            batchBuf.write(data)
+            val buffered = batchBuf.size()
+            if (buffered >= chunkSize) {
+                flushBatchLocked(chunkSize)
+                return
+            }
+            if (batchJob == null) {
+                batchDeadline = System.currentTimeMillis() + BATCH_FLUSH_MS
+                batchJob = scope.launch {
+                    val wait = (batchDeadline - System.currentTimeMillis()).coerceAtLeast(0)
+                    delay(wait)
+                    synchronized(batchBuf) {
+                        flushBatchLocked(chunkSize)
+                        batchJob = null
+                    }
+                }
+            }
+        }
+        ensureBatchGuard()
+    }
+
+    /**
+     * 合批常驻守卫（v0.4.11）：每 50ms 兜底冲刷一次非空缓冲。不再把正确性
+     * 押在 12ms 一次性定时器协程的存活上——2026-09-27 真机实锤：514B 写
+     * 异常后（即便被 catch）出现"帧滞留缓冲静默丢失"（小包直写路径通、
+     * 合批路径零到达），定时器协程一旦没跑到收尾就永久滞留。守卫在，
+     * 缓冲最多滞留 50ms。
+     */
+    private var batchGuardJob: Job? = null
+    private fun ensureBatchGuard() {
+        if (batchGuardJob?.isActive == true) return
+        batchGuardJob = scope.launch {
+            while (true) {
+                delay(50)
+                val cs = (currentMtu - 3).coerceAtLeast(20).coerceAtMost(240)
+                synchronized(batchBuf) {
+                    if (batchBuf.size() > 0 && phase == Phase.READY &&
+                        rxCharacteristic != null) {
+                        batchJob?.cancel()
+                        batchJob = null
+                        flushBatchLocked(cs)
+                    }
+                }
+            }
+        }
+    }
+
+    /** 必须持 batchBuf 锁调用：把缓冲切成 MTU-3 包入写队列并冲刷 */
+    private fun flushBatchLocked(chunkSize: Int) {
+        batchJob?.cancel()
+        batchJob = null
+        if (batchBuf.size() == 0) return
+        val data = batchBuf.toByteArray()
+        batchBuf.reset()
         var offset = 0
+        val chunks = mutableListOf<ByteArray>()
         while (offset < data.size) {
             val end = (offset + chunkSize).coerceAtMost(data.size)
             chunks.add(data.copyOfRange(offset, end))
             offset = end
         }
-        if (chunks.isEmpty()) chunks.add(ByteArray(0))
         synchronized(writeQueue) {
             writeQueue.addAll(chunks)
         }
@@ -502,7 +676,12 @@ class BleManager(
      * 哑管道纪律不受影响：仍只"组这一种本地帧"，不解析任何转发内容。
      */
     fun writeLocalSignal(json: String) {
-        if (phase != Phase.READY || rxCharacteristic == null) return
+        // 静默退出改为留痕（2026-09-26 排查教训：下行链路任何一跳哑掉
+        // 都无日志可查）：link 信令是链路心跳，发不出去必须可见
+        if (phase != Phase.READY || rxCharacteristic == null) {
+            BridgeState.log("⚠ local signal dropped: BLE not ready (phase=$phase)")
+            return
+        }
         val payload = json.toByteArray(Charsets.UTF_8)
         val frame = ByteArray(payload.size + 3)
         frame[0] = 0x02                             // FRAME_TYPE_JSON
@@ -523,18 +702,31 @@ class BleManager(
             if (writeInFlight) return
             val next = writeQueue.removeFirstOrNull() ?: return
             writeInFlight = true
+            writeInFlightAt = android.os.SystemClock.elapsedRealtime()
             packet = next
         }
-        val ok = if (Build.VERSION.SDK_INT >= 33) {
-            g.writeCharacteristic(rx, packet, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
-                BluetoothGatt.GATT_SUCCESS
-        } else {
-            @Suppress("DEPRECATION")
-            rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            @Suppress("DEPRECATION")
-            rx.value = packet
-            @Suppress("DEPRECATION")
-            g.writeCharacteristic(rx)
+        ensureWriteGuard()
+        val ok = try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                g.writeCharacteristic(rx, packet, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
+                    BluetoothGatt.GATT_SUCCESS
+            } else {
+                @Suppress("DEPRECATION")
+                rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                @Suppress("DEPRECATION")
+                rx.value = packet
+                @Suppress("DEPRECATION")
+                g.writeCharacteristic(rx)
+            }
+        } catch (e: IllegalArgumentException) {
+            // Android 13+ 的新 writeCharacteristic 对"值超过当前 MTU-3"不返回
+            // 错误码而是直接抛异常——2026-09-27 真机闪退实锤（合批 514B 大包
+            // 撞上协商窗口期的 23 MTU，异常从 HiveMQ 回调线程炸出 = 进程死）。
+            // 自愈：缓存 MTU 按本包大小减半降档（后续合批自动变小），本包丢弃
+            // ——信令类由设备对账协议补，丢包有账可查
+            BridgeState.log("⚠ BLE 写超长（${packet.size}B），MTU 缓存降档自愈")
+            currentMtu = maxOf(23, (packet.size / 2) + 3).coerceAtMost(currentMtu)
+            false
         }
         if (!ok) {
             BridgeState.log("BLE write call failed, packet dropped")
@@ -542,6 +734,35 @@ class BleManager(
                 writeInFlight = false
             }
             pumpWriteQueue()
+        }
+    }
+
+    /**
+     * 写队列常驻守卫（v0.4.6，替代 v0.4.3 的逐写布防）：每 2s 自查一次
+     * writeInFlight 是否超过 5s 没被回调清掉——是就强制放行并打日志。
+     * 逐写布防的漏洞：任何路径让 writeInFlight 卡 true 而没走到布防
+     *（竞态/协程异常），看门狗就永远不存在，下行静默死到重连
+     *（2026-09-26 晚真机实锤：上行正常、broker 在投递，设备却一个
+     * 字节都收不到，且全链路零错误日志）。常驻守卫与写入路径解耦，
+     * 不依赖"每次都记得布防"。
+     */
+    private fun ensureWriteGuard() {
+        if (writeGuardJob?.isActive == true) return
+        writeGuardJob = scope.launch {
+            while (true) {
+                delay(2000)
+                val since = synchronized(writeQueue) {
+                    if (writeInFlight) writeInFlightAt else 0L
+                }
+                if (since != 0L &&
+                    android.os.SystemClock.elapsedRealtime() - since > 5000) {
+                    BridgeState.log("⏱ BLE write 卡死 >5s，强制继续队列")
+                    synchronized(writeQueue) {
+                        writeInFlight = false
+                    }
+                    pumpWriteQueue()
+                }
+            }
         }
     }
 

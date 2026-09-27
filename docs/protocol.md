@@ -37,11 +37,14 @@ BLE 单包放不下时，分帧规则：第一包 bit7 置 0 的 type 加 0x80 �
 - 尾包：type=原始 type，len = 本包 payload 字节数
 - 单包帧：type 不置 0x80，len = payload 长度
 - 接收端凑满首包宣告的总长度即重组完成；超出总长度视为对端异常，丢弃残帧
+- **写入边界无意义（ADR-062）**：设备端 `FrameDecoder` 是字节流状态机——一次 BLE 写入可含任意多帧的拼接，一帧也可跨多次写入。App 的合批层（12ms/50ms 窗口）与 MTU 切块都不对齐帧边界，这是协议的既定语义而非例外；按"一次写入=一个协议包"解析会静默丢弃合批里的后续帧（曾致 receipt/reply 断链一整天）。配套：残帧超 1s 无续包即重扫（续包丢失自愈）
 
 ## 3. JSON 信令（type=0x02）
 
 设备上行：
 - `{"type":"hello","device":"gaga-01","fw":"0.1.0"}` —— 服务器回 `hello_ack`（纯对时，envelope ts）
+- **`device` 字段（ADR-057，2026-09-27）**：`rec_start` / `rec_stop` / `rec_status_query` 同样携带（如 `{"type":"rec_start","device":"gaga-01"}`）——多设备（手表 + 胸前）同群同 broker 时服务端按它记账与补发；下行 `receipt`/`reply`/`error` 由服务端盖同款戳，设备端非本机的信令直接忽略。不带 device 的旧信令维持兼容（回落 hello 登记设备）
+- `{"type":"rec_status_query"}` —— **对账查询（2026-09-26）**：消息卡"识别中"超 10s 仍无 receipt/reply（回程可能在 BLE/MQTT 某跳丢了）时，设备每 10s 问一次；服务端幂等重发最近一条结果信令（receipt 或 reply），设备侧 fillAsk/fillReply 对重复信令安全。这是下行丢失的自愈通道
 
 服务器下行：
 - `{"type":"hello_ack","ts":1758537600}` —— hello 应答：设备凭 envelope `ts` 校准状态栏时钟
@@ -52,8 +55,8 @@ BLE 单包放不下时，分帧规则：第一包 bit7 置 0 的 type 加 0x80 �
 - `{"type":"talk_end"}` —— 主动结束实时对话（M5）
 
 服务器下行：
-- `{"type":"receipt","text":"今天天气怎么样","ts":1758537600}` —— 消息已送达飞书；`text` = ASR 终稿（设备消息卡"你："一栏凭它显示），`ts` = Unix 秒（设备对时，envelope 自动补）
-- `{"type":"reply","text":"晴，25℃","msg_id":"..."}` —— Hermes 回复（**已拍平为纯文本**，服务端 textfmt.flatten_markdown 处理掉 Markdown 标记），设备消息卡"GAGA："一栏就地填充；息屏时设备自动亮屏直达该卡详情页
+- `{"type":"receipt","text":"今天天气怎么样","msg_id":"om_xxx","ts":1758537600}` —— 消息已送达飞书；`text` = ASR 终稿（设备消息卡"你："一栏凭它显示），`msg_id` = 平台消息 id（设备存卡上，reply 的 reply_to 凭它精确配对），`ts` = Unix 秒（设备对时，envelope 自动补）
+- `{"type":"reply","text":"晴，25℃","reply_to":"om_xxx"}` —— Hermes 回复（**已拍平为纯文本**，服务端 textfmt.flatten_markdown 处理掉 Markdown 标记），设备消息卡"GAGA："一栏就地填充；息屏时设备自动亮屏直达该卡详情页。`reply_to` = 它引用的那条鸭子消息 id（2026-09-26 会话圈过滤后只转发回复嘎嘎的回流；设备优先按 reply_to 精确配对，miss 才 FIFO 兜底）
 - `{"type":"talk_ready","session":"..."}` —— 实时会话已建立（M5：音频仍走 MQTT 帧透传，无 ws_url，ADR-021）
 - `{"type":"talk_asr","text":"...","final":false}` —— 实时对话中用户语音的 ASR 文本（上屏；final=true 为终稿）。**text 为空串 = 新一句开始**（ADR-034：实时 ASR 快照分层含上一句残留，服务端在新一句开始时先发空文本，设备清掉上一句字幕再显示新句）
 - `{"type":"talk_reply","text":"...","final":false}` —— 模型回复文本（上屏；流式节流 ~300ms，final=true 为整句）
@@ -77,11 +80,13 @@ Broker 由服务器提供。
 - QoS 1，不 retain
 - App clientId: `app-<androidId>`，keepalive 60s
 - 服务器 clientId: `server`
+- **鉴权（ADR-061，2026-09-27）**：broker 公网暴露必须开 username/password（mosquitto `allow_anonymous false`，操作手册见 `server/README.md` 公网部署章节）。客户端凭据留空 = 匿名，仅限局域网/内网 broker。
+- **手表客户端（ADR-051）**：clientId `watch-<deviceId>`，同样发 `gaga/up` / 订 `gaga/down`。手表没有 BLE，MQTT 也无 MTU 限制，所以**上行直接发单包完整帧**（不走 §2 的 0x80 分片）；服务端 `frames.py` 的 FrameAssembler 同时吃单包帧与分片帧，无需任何改动。**下行照常分片**：服务端按 512B/包分片下发（§2 语义），手表端用 `Frame.Reassembler` 重组（v0.2.6 起补齐；此前只剥帧头不重组，>509B 的 reply 静默丢弃）。
 
 ## 5. 里程碑 1 链路（语音发飞书）
 
 ```
-按住右下键说话 → 松开 → 消息卡占位上屏（你：识别中…）→ 设备 Opus 编码 → BLE 分帧上行
+按下右下键/摇动开录（按下沿即录零丢失）→ 再按/再摇收尾（<300ms 录制时长静默丢弃零信令）→ 消息卡占位上屏（你：识别中…）→ 设备 Opus 编码 → BLE 分帧上行
 → App 转发 MQTT gaga/up → 服务器重组、解 Opus
 → Whisper ASR → 接入端投递（channel.send_text，ADR-030；飞书=官方 API）→ receipt{text,ts,msg_id} 回设备
 → 消息卡填"你：<ASR 文本>"，转"正在回复…"（60s 无回复转"（还没回复）"）

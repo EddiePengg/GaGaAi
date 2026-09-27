@@ -10,7 +10,7 @@ import time
 
 import serial
 
-PORT = "/dev/cu.usbmodem101"
+PORT = "/dev/cu.usbmodem2101"
 W, H = 466, 466
 EXPECTED = W * H * 2  # RGB565 = 2 字节/像素
 

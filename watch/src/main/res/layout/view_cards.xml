@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ① 消息卡首页（默认）
+     2026-09-26 报障修正：
+       - 卡片要去掉（被底部那个椭圆按钮挤没了）→ 现在 ScrollView 权重=1，占主体
+       - 录音按钮"圆形也不对称还这么大"→ 之前 bg_duck_button 是 oval + size
+         120x120，套在 wrap_content 的 TextView 上被拉成巨椭圆。现在改成
+         **固定 48dp 正圆按钮 + 独立状态文字**，收在底部
+     圆屏 233×233dp，横向 32dp 内边距防裁字 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:orientation="vertical"
+    android:paddingStart="32dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="32dp"
+    android:paddingBottom="10dp">
+
+    <!-- 顶部状态条：时间 · 电量 · MQTT -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/tvClock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="12:34"
+            android:textColor="@color/bg_warm"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/tvBattery"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="7dp"
+            android:text="🔋--%"
+            android:textColor="@color/ink_soft"
+            android:textSize="9sp" />
+
+        <TextView
+            android:id="@+id/tvLink"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="7dp"
+            android:text="MQTT ·"
+            android:textColor="@color/stop_red"
+            android:textSize="9sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvNoBroker"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingTop="2dp"
+        android:text="未配置服务器 → 点此设置"
+        android:textColor="@color/busy_amber"
+        android:textSize="9sp"
+        android:visibility="gone" />
+
+    <!-- 卡片列表：主体，权重撑满剩余空间 -->
+    <ScrollView
+        android:id="@+id/scrollCards"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fadeScrollbars="false"
+        android:paddingTop="5dp"
+        android:paddingBottom="5dp"
+        android:scrollbars="vertical">
+
+        <LinearLayout
+            android:id="@+id/listCards"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+
+    <!-- 底部：状态文字 + 小圆录音按钮 -->
+    <TextView
+        android:id="@+id/tvStatePill"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:text="@string/state_idle"
+        android:textColor="@color/ink_soft"
+        android:textSize="10sp" />
+
+    <ImageView
+        android:id="@+id/btnRecord"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="3dp"
+        android:background="@drawable/bg_rec_button"
+        android:contentDescription="录音"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_mic" />
+
+</LinearLayout>

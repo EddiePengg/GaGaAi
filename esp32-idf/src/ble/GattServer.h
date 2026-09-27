@@ -41,6 +41,12 @@ public:
     void handleDisconnect();                   // 断连：清状态、丢残帧、恢复广播
     void handleMtuChange(uint16_t mtu);        // MTU 协商结果落账，决定分包大小
     void startAdvertising();  // 连接失败/断连/sync 时恢复广播
+    void onHostSync();        // host 就绪回调路径：落 synced_ 标志
+
+    // 广播看门狗（appTask 周期调）：未连接却不在广播 = 广播已死（2026-09-26
+    // 真机实锤：NimBLE 对 0x3e 握手失败的自动重试可失败于 rc=3，之后广播
+    // 永久静默——设备对一切扫描隐身，症状"App 直连失败/搜不到"）。强停强启。
+    void tick();
 
 private:
 
@@ -48,6 +54,9 @@ private:
 
     char     name_[16]     = {0};       // 广播名 GAGA-XXXX
     bool     connected_    = false;
+    bool     synced_       = false;     // host sync 已到（广播操作的前提）
+    uint32_t lastAdvCheckMs_ = 0;       // 看门狗节流（每 10s 自查一次）
+    uint32_t lastRxMs_       = 0;       // 最近一次 RX 写入时刻（残帧看门狗基准）
     uint16_t connHandle_   = 0xFFFF;    // 当前连接句柄（未连接时无效值）
     uint16_t mtu_          = DEFAULT_MTU;  // 协商后的 MTU，sendFrame 分包依据
     uint16_t txValHandle_  = 0;         // TX 特征值句柄（notify 用；host 启动后才回填）

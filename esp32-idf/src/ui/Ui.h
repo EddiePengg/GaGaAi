@@ -44,6 +44,11 @@ public:
     // 搭整棵控件树并挂状态回调（只调一次；内部自取 LVGL 锁）
     void begin(AppState* app, MsgLog* log);
     void tick();  // ~10Hz：录音计时 / 便签回落 / 状态栏刷新 / 等待动效 / 软超时
+                  //（熄屏直接返回：黑屏不渲染——"正在回复…"动效曾每 500ms 对着
+                  // 睡着的面板全量重绘 20 卡，熄屏电老鼠的大头，ADR-054）
+    // 亮屏时强制全量重刷（setScreen(On) 后调用）：熄屏期间渲染被闸，GRAM
+    // 可能落后于数据状态，这里一次性对齐
+    void fullRefresh();
 
     // BLE 连接态变化 → 状态栏圆点（绿连 / 灰断）
     void setBleConnected(bool connected);
@@ -102,20 +107,27 @@ private:
 
     // ---- 消息卡列表 ----
     static constexpr int CARD_POOL = 20;  // 与 MsgLog::MAX_MSGS 一致
-    struct Card {          // 一张卡三件套：容器 / 你问一行 / GAGA 答一行
+    struct Card {          // 卡片七件套：容器 / 问行 / 时间 / 你问 / 答行 / 鸭图标+答 / 状态竖条
         lv_obj_t* cont;
+        lv_obj_t* askRow;    // 首行横排：你问（伸展）+ 右上角时间（2026-09-27 定稿）
+        lv_obj_t* time;      // 发送时刻 HH:MM（RTC 未对时则隐藏）
         lv_obj_t* ask;
+        lv_obj_t* replyRow;  // 答行横排：16px 鸭图标（代言 GAGA，Failed 态隐藏）+ 回复文本
+        lv_obj_t* duck;      // 小鸭图标 img_duck16（冒号保留在文本里，图标顶替"GAGA"字样）
         lv_obj_t* reply;
+        lv_obj_t* statBar;   // 发送状态竖条（黄=发送中 绿=已送达 红=失败）
     };
     lv_obj_t* listCont_  = nullptr;
     lv_obj_t* emptyCont_ = nullptr;    // 空状态：gaga 字标 + 引导文案
     Card      cards_[CARD_POOL] = {};
 
     // ---- 详情页 ----
-    lv_obj_t* detailCont_    = nullptr;
-    lv_obj_t* backLabel_     = nullptr;  // 胶囊按钮
-    lv_obj_t* detailAsk_     = nullptr;
-    lv_obj_t* detailReply_   = nullptr;
+    lv_obj_t* detailCont_      = nullptr;
+    lv_obj_t* backLabel_       = nullptr;  // 胶囊按钮
+    lv_obj_t* detailAsk_       = nullptr;
+    lv_obj_t* detailReplyRow_  = nullptr;  // 答行横排（与卡片一致：鸭图标 + 回复文本）
+    lv_obj_t* detailDuck_      = nullptr;  // 16px 鸭图标（Failed 态隐藏）
+    lv_obj_t* detailReply_     = nullptr;
     uint32_t  detailId_      = 0;   // 0 = 未在详情页
 
     // ---- 设置页 ----

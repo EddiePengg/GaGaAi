@@ -28,7 +28,8 @@ gaga-ai/
 │   ├── decisions.md      # 架构决策记录（ADR）
 │   ├── hardware.md       # 硬件规格与按键分工
 │   └── roadmap.md        # 里程碑与进度
-├── app/               # Android 哑管道（Kotlin，已可构建）
+├── app/               # Android 哑管道（Kotlin，已可构建；独立 Gradle 工程）
+├── watch/             # 手表客户端（Kotlin，已可构建；独立 Gradle 工程，ADR-051）——设备侧客户端，不是哑管道
 ├── server/            # 服务端（MQTT + ASR + 飞书，M1 已跑通，Python 3.12 + uv）
 ├── esp32-idf/         # 设备固件 ESP-IDF 线（ADR-020；PlatformIO framework=espidf + 微雪官方 BSP，经 src/idf_component.yml 拉取）
 ├── website/           # 对外展示站：零依赖纯静态单页（ADR-040），内容与 docs/ 同步
@@ -39,6 +40,7 @@ gaga-ai/
 ## 各组件的"宪法"
 
 - **app/**：永远是哑管道，只转发不解析。禁止在 App 里写业务逻辑（对话状态机、工具调用一律放 server）。
+- **watch/**：手表客户端，**设备侧客户端而非哑管道**（ADR-051）——它自己组帧、走信令状态机、编码音频，与 esp32-idf/ 是同一层的东西（都是"嘎嘎设备"）。但信令 schema 与帧格式仍以 `docs/protocol.md` 为准，业务大脑仍在 server。**不许反向依赖 app/**，两边是平级独立工程。
 - **server/**：系统唯一的大脑。鉴权、ASR、工具分发、日志全在这。
 - **esp32-idf/**：引脚权威来源 = 微雪官方 BSP（`waveshare/esp32_s3_touch_amoled_1_75c`）+ `reference/` 里的原理图，禁止猜。
 
@@ -47,6 +49,7 @@ gaga-ai/
 - JDK：`/Applications/Android Studio.app/Contents/jbr/Contents/Home`（JDK 25，需配 Gradle 9.x）
 - Android SDK：`~/Library/Android/sdk`（platforms: android-35）
 - App 构建：`cd app && JAVA_HOME=... ./gradlew assembleDebug`（详见 `app/README.md`）
+- 手表构建：`cd watch && JAVA_HOME=... ./gradlew assembleDebug`（详见 `watch/README.md`，产物 `watch/build/outputs/apk/debug/gaga-watch-debug.apk`）
 
 ## 约定
 

@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⑤ 调试页：按键测试 + 传感器实时值 + 日志 + 音效试听
+     尺寸约束：233×233dp 圆屏，32dp 横向内边距 + 紧凑字号，ScrollView 兜底 -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/terminal_bg"
+    android:fadeScrollbars="false"
+    android:paddingStart="32dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="32dp"
+    android:scrollbars="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:text="🔧 调试"
+            android:textColor="@color/bg_warm"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <!-- 按键测试 -->
+        <TextView style="@style/DbgHeader" android:text="─── 按键 ───" />
+
+        <TextView
+            android:id="@+id/tvKeyCode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="( 按任意键 )"
+            android:textColor="@color/duck_yellow"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvKeyDetail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text=""
+            android:textColor="@color/ink_soft"
+            android:textSize="9sp" />
+
+        <!-- 传感器 -->
+        <TextView style="@style/DbgHeader" android:text="─── 传感器 ───" />
+
+        <TextView
+            android:id="@+id/tvAcc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ACC x:+0.0 y:+0.0 z:+0.0"
+            android:textColor="@color/terminal_text"
+            android:textSize="9sp" />
+
+        <TextView
+            android:id="@+id/tvGyr"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="GYR x:+0.0 y:+0.0 z:+0.0"
+            android:textColor="@color/terminal_text"
+            android:textSize="9sp" />
+
+        <TextView
+            android:id="@+id/tvShake"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="晃动 ░░░░░ 0.0/3.0"
+            android:textColor="@color/terminal_text"
+            android:textSize="9sp" />
+
+        <SeekBar
+            android:id="@+id/seekThreshold"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="30" />
+
+        <!-- 日志 -->
+        <TextView style="@style/DbgHeader" android:text="─── 日志 ───" />
+
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="@color/terminal_text"
+            android:textSize="9sp" />
+
+        <!-- 音效试听 -->
+        <TextView style="@style/DbgHeader" android:text="─── 试听 ───" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/btnSndQuack"
+                style="@style/DbgBtn"
+                android:text="嘎" />
+
+            <TextView
+                android:id="@+id/btnSndChime"
+                style="@style/DbgBtn"
+                android:text="叮咚" />
+
+            <TextView
+                android:id="@+id/btnSndPoot"
+                style="@style/DbgBtn"
+                android:text="噗噗" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="18dp" />
+
+    </LinearLayout>
+</ScrollView>
