@@ -25,6 +25,8 @@ public:
 
     // ---- 录音事件入口 ----
     void toggle();   // 开/关唯一入口（右下按下沿、摇动、串口 'r' 共用）
+    // 静音自动收尾（上行泵请求，tick 里执行）：discard=整段几乎无语音 → 静默撤销
+    void autoFinish(bool discard);
 
     // app 主循环 tick：确认窗到点 commit（rec_start + 缓冲整体冲出）
     void tick();

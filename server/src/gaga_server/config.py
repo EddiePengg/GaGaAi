@@ -109,6 +109,9 @@ class Config:
     qwen_asr_model: str
     dashscope_api_key: str
     dashscope_ws_url: str
+    # ---- 主动 TTS 语音通知（POST /notify；qwen3-tts-flash 本账号已实测可用）----
+    tts_model: str
+    tts_voice: str
     volc_asr_endpoint: str
     volc_asr_resource_id: str
 
@@ -179,4 +182,6 @@ def load_config() -> Config:
         dashscope_api_key=os.environ.get("DASHSCOPE_API_KEY",
                                          str(bailian.get("api_key", ""))),
         dashscope_ws_url=_resolve_dashscope_ws(bailian),
+        tts_model=os.environ.get("TTS_MODEL", "qwen3-tts-flash"),
+        tts_voice=os.environ.get("TTS_VOICE", "Cherry"),
     )

@@ -5,6 +5,7 @@
 #include "esp_log.h"
 
 #include "AppContext.h"
+#include "state/Settings.h"
 #include "audio/AudioPipe.h"
 #include "audio/UplinkPump.h"
 #include "ble/GattServer.h"
@@ -113,9 +114,28 @@ void Recorder::toggle() {
     finish();
 }
 
+void Recorder::autoFinish(bool discard) {
+    if (ctx_->app->recState() != RecState::Recording) return;
+    if (!ctx_->pump->committed() || discard) {
+        cancel();   // 确认窗内/整段无语音：静默撤销，零信令零上行
+        // 反馈不能静默（用户实锤：按了键却什么都没发生=困惑）：噗噗+便签说明
+        ctx_->audio->event(AudioPipe::SndEv::Error);   // "噗噗"=没录到声音
+        ctx_->ui->showNote("没听到声音");
+        return;
+    }
+    finish();
+}
+
 // 主循环 tick：确认窗到点 → rec_start（之后泵自动把缓冲整体冲出）。
 // 按下即录 + 松手不停（ADR-045 v2）：没有宽限/锁定逻辑了，这里只剩 commit。
 void Recorder::tick() {
+    // 静音自动收尾（上行泵请求）：连续静音 8s / 超时 3min → 收尾或静默撤销
+    if (ctx_->pump->autoStopReq()) {
+        const bool discard = ctx_->pump->autoDiscard();
+        ctx_->pump->autoStopClear();
+        autoFinish(discard);
+        return;
+    }
     if (ctx_->app->recState() == RecState::Recording &&
         !ctx_->pump->committed() && millis() >= commitAtMs_) {
         ctx_->pump->commit();

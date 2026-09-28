@@ -16,6 +16,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.IntentSender
 import android.content.pm.PackageManager
+import android.net.wifi.WifiManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -58,11 +59,6 @@ class MainActivity : Activity(), BridgeState.Listener {
     private lateinit var tvLog: TextView
     private lateinit var logScroll: ScrollView
     private lateinit var btnClearLog: Button
-    private lateinit var etBrokerHost: EditText
-    private lateinit var etBrokerPort: EditText
-    private lateinit var etMqttUser: EditText
-    private lateinit var etMqttPass: EditText
-    private lateinit var btnSaveBroker: Button
     private lateinit var btnToggleService: Button
     private lateinit var rowBattery: View
     private lateinit var rowCompanion: View
@@ -73,8 +69,6 @@ class MainActivity : Activity(), BridgeState.Listener {
     private lateinit var serverStatusRow: View
     private lateinit var serverStatusDot: TextView
     private lateinit var serverStatusText: TextView
-    private lateinit var serverEditArea: View
-    private lateinit var serverEditToggle: TextView
 
     // 已渲染状态：行数 + 最后一行内容，用于增量追加并检测环形缓冲回卷
     private var renderedLogCount = -1
@@ -124,11 +118,6 @@ class MainActivity : Activity(), BridgeState.Listener {
         }
         logScroll = findViewById(R.id.logScroll)
         btnClearLog = findViewById(R.id.btnClearLog)
-        etBrokerHost = findViewById(R.id.etBrokerHost)
-        etBrokerPort = findViewById(R.id.etBrokerPort)
-        etMqttUser = findViewById(R.id.etMqttUser)
-        etMqttPass = findViewById(R.id.etMqttPass)
-        btnSaveBroker = findViewById(R.id.btnSaveBroker)
         btnToggleService = findViewById(R.id.btnToggleService)
         rowBattery = findViewById(R.id.rowBattery)
         rowCompanion = findViewById(R.id.rowCompanion)
@@ -139,14 +128,8 @@ class MainActivity : Activity(), BridgeState.Listener {
         serverStatusRow = findViewById(R.id.serverStatusRow)
         serverStatusDot = findViewById(R.id.serverStatusDot)
         serverStatusText = findViewById(R.id.serverStatusText)
-        serverEditArea = findViewById(R.id.serverEditArea)
-        serverEditToggle = findViewById(R.id.serverEditToggle)
 
         Prefs.ensureLoaded(this)
-        etBrokerHost.setText(Prefs.brokerHost)
-        etBrokerPort.setText(Prefs.brokerPort.toString())
-        etMqttUser.setText(Prefs.mqttUser)
-        etMqttPass.setText(Prefs.mqttPass)
 
         // 整体状态徽章：点击出修复指引
         tvOverall.setOnClickListener { showFixGuide() }
@@ -154,30 +137,9 @@ class MainActivity : Activity(), BridgeState.Listener {
         // 齿轮：App 内设置（终端日志显隐 + 系统权限入口）
         btnSettings.setOnClickListener { showSettingsDialog() }
 
-        btnSaveBroker.setOnClickListener {
-            val host = etBrokerHost.text.toString().trim()
-            val port = etBrokerPort.text.toString().toIntOrNull() ?: Prefs.DEFAULT_PORT
-            val user = etMqttUser.text.toString()
-            val pass = etMqttPass.text.toString()
-            Prefs.saveBroker(this, host, port, user, pass)
-            Toast.makeText(this, "Saved $host:${Prefs.brokerPort}", Toast.LENGTH_SHORT).show()
-            serverEditArea.visibility = View.GONE  // 保存即收起，页面回到状态展示
-            if (BridgeState.current().serviceRunning) {
-                startService(
-                    Intent(this, GagaService::class.java)
-                        .setAction(GagaService.ACTION_BROKER_CHANGED)
-                )
-            }
-        }
-
-        // 服务器卡：状态行/“修改”都可展开编辑表单
-        val toggleServerEdit = {
-            val show = serverEditArea.visibility != View.VISIBLE
-            serverEditArea.visibility = if (show) View.VISIBLE else View.GONE
-            serverEditToggle.text = if (show) "Collapse ▴" else "Edit ▾"
-        }
-        serverStatusRow.setOnClickListener { toggleServerEdit() }
-        serverEditToggle.setOnClickListener { toggleServerEdit() }
+        // 服务器卡：主屏只显示状态；服务器配置与嘎嘎配网都在设置对话框里
+        //（2026-09-27 用户定稿：主屏不堆表单，点状态行直达设置）
+        serverStatusRow.setOnClickListener { showSettingsDialog() }
 
         btnClearLog.setOnClickListener {
             BridgeState.clearLogs()
@@ -267,13 +229,175 @@ class MainActivity : Activity(), BridgeState.Listener {
         }
     }
 
+    /** WiFi 列表选择的授权回调挂起点（授权后自动重试选择） */
+    private var pendingWifiPick: ((String) -> Unit)? = null
+
+    /** 手机当前连接的 SSID（读不到返回 null——不抛错不阻塞，字段留空手填） */
+    private fun currentWifiSsid(): String? = try {
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) null
+        else @Suppress("DEPRECATION") getSystemService(WifiManager::class.java)
+            ?.connectionInfo?.ssid
+            ?.removeSurrounding("\"")
+            ?.takeIf { it.isNotEmpty() && it != "<unknown ssid>" }
+    } catch (_: Exception) { null }
+
+    /**
+     * WiFi 列表单选。只读系统缓存的后台扫描结果（WifiManager.scanResults），
+     * 绝不主动 startScan + 等广播——旧版"列表加载卡死"就是同步扫描死等的锅。
+     * 无定位权限时申请一次，拒绝过就走手动输入（字段本身就是可编辑的）。
+     */
+    private fun pickWifiSsid(onPick: (String) -> Unit) {
+        // 官方规则（developer.android.com wifi-permissions，2026-09-27 核实）：
+        // targetSdk 33+ 调 getScanResults() 需 NEARBY_WIFI_DEVICES（运行时），
+        // 且要拿未涂黑的 SSID 必须叠加 ACCESS_FINE_LOCATION——两个都要。
+        // neverForLocation 标志不能加（加了 SSID/BSSID 会被系统涂黑）
+        val wanted = buildList {
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            if (Build.VERSION.SDK_INT >= 33) {
+                add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+        }
+        val missing = wanted.filter {
+            Build.VERSION.SDK_INT < 23 ||
+                checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }
+        android.util.Log.d("gaga.wifi", "列表按钮：missing=$missing sdk=${Build.VERSION.SDK_INT}")
+        if (missing.isNotEmpty()) {
+            pendingWifiPick = onPick
+            requestPermissions(missing.toTypedArray(), REQ_PICK_WIFI)
+            Toast.makeText(this, "需要权限读 WiFi 列表（拒绝也可手动输入名称）", Toast.LENGTH_LONG).show()
+            return
+        }
+        val names = scanSsidNames()
+        android.util.Log.d("gaga.wifi", "缓存扫描结果：${names.size} 个 SSID")
+        if (names.isEmpty()) {
+            // 缓存被清过的兜底：异步触发一次扫描 + 3s 后回读，绝不阻塞等待
+            Toast.makeText(this, "正在扫描 WiFi…", Toast.LENGTH_SHORT).show()
+            val wm = getSystemService(WifiManager::class.java)
+            if (wm != null) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val ok = wm.startScan()
+                    android.util.Log.d("gaga.wifi", "主动 startScan=$ok（false=被节流，等缓存）")
+                } catch (e: Exception) {
+                    android.util.Log.w("gaga.wifi", "startScan 异常: ${e.message}")
+                }
+            }
+            android.os.Handler(mainLooper).postDelayed({
+                val retry = scanSsidNames()
+                android.util.Log.d("gaga.wifi", "补扫回读：${retry.size} 个 SSID")
+                if (retry.isEmpty()) {
+                    Toast.makeText(this, "没读到 WiFi 列表，可直接手动输入名称", Toast.LENGTH_LONG).show()
+                } else {
+                    showWifiChoice(retry, onPick)
+                }
+            }, 3000)
+            return
+        }
+        showWifiChoice(names, onPick)
+    }
+
+    private fun scanSsidNames(): List<String> = try {
+        @Suppress("DEPRECATION")
+        getSystemService(WifiManager::class.java)?.scanResults.orEmpty()
+            .asSequence()
+            .map { it.SSID.removeSurrounding("\"") }
+            .filter { it.isNotEmpty() && it != "<unknown ssid>" }
+            .distinct()
+            .sorted()
+            .toList()
+    } catch (_: Exception) { emptyList() }
+
+    private fun showWifiChoice(names: List<String>, onPick: (String) -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("选择 WiFi")
+            .setItems(names.toTypedArray()) { _, which -> onPick(names[which]) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     private fun showSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
+
+        // ---- 📡 服务器（MQTT）：主屏迁入的 broker 配置（2026-09-27）----
+        val etBrokerHost = view.findViewById<EditText>(R.id.etBrokerHost)
+        val etBrokerPort = view.findViewById<EditText>(R.id.etBrokerPort)
+        val etMqttUser = view.findViewById<EditText>(R.id.etMqttUser)
+        val etMqttPass = view.findViewById<EditText>(R.id.etMqttPass)
+        etBrokerHost.setText(Prefs.brokerHost)
+        etBrokerPort.setText(Prefs.brokerPort.toString())
+        etMqttUser.setText(Prefs.mqttUser)
+        etMqttPass.setText(Prefs.mqttPass)
+        view.findViewById<Button>(R.id.btnSaveBroker).setOnClickListener {
+            val host = etBrokerHost.text.toString().trim()
+            val port = etBrokerPort.text.toString().toIntOrNull() ?: Prefs.DEFAULT_PORT
+            Prefs.saveBroker(this, host, port,
+                etMqttUser.text.toString(), etMqttPass.text.toString())
+            Toast.makeText(this, "Saved $host:${Prefs.brokerPort}", Toast.LENGTH_SHORT).show()
+            if (BridgeState.current().serviceRunning) {
+                startService(
+                    Intent(this, com.gagaai.app.service.GagaService::class.java)
+                        .setAction(com.gagaai.app.service.GagaService.ACTION_BROKER_CHANGED))
+            }
+        }
+
+        // ---- 🦆 嘎嘎配网（家模式）：WiFi + 服务器配置一起下发 ----
+        val etWifiSsid = view.findViewById<EditText>(R.id.etWifiSsid)
+        val etWifiPass = view.findViewById<EditText>(R.id.etWifiPass)
+        // SSID 预填手机当前连接的网络（在家配家模式，十有八九就是它）
+        val currentSsid = currentWifiSsid()
+        if (currentSsid != null && etWifiSsid.text.isBlank()) etWifiSsid.setText(currentSsid)
+        view.findViewById<Button>(R.id.btnPickWifi).setOnClickListener {
+            pickWifiSsid { ssid -> etWifiSsid.setText(ssid) }
+        }
+        view.findViewById<Button>(R.id.btnSendWifi).setOnClickListener {
+            val ssid = etWifiSsid.text.toString().trim()
+            if (ssid.isEmpty()) {
+                Toast.makeText(this, "WiFi 名称不能为空", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            // MQTT 配置显式随行（用户 2026-09-27 要求）：服务器区块的值 > 已存 Prefs
+            val host = etBrokerHost.text.toString().trim().ifEmpty { Prefs.brokerHost }
+            val port = etBrokerPort.text.toString().trim().toIntOrNull() ?: Prefs.brokerPort
+            val mUser = etMqttUser.text.toString().ifEmpty { Prefs.mqttUser }
+            val mPass = etMqttPass.text.toString().ifEmpty { Prefs.mqttPass }
+            val json = org.json.JSONObject()
+                .put("type", "wifi_cfg")
+                .put("ssid", ssid)
+                .put("pass", etWifiPass.text.toString())
+                .put("host", host)
+                .put("port", port)
+            if (mUser.isNotEmpty()) {
+                json.put("mqtt_user", mUser).put("mqtt_pass", mPass)
+            }
+            startService(
+                Intent(this, com.gagaai.app.service.GagaService::class.java)
+                    .setAction(com.gagaai.app.service.GagaService.ACTION_SEND_WIFI)
+                    .putExtra("json", json.toString()))
+            Toast.makeText(this, "已下发到嘎嘎 · 蓝牙断 60s 后自动切家模式", Toast.LENGTH_LONG).show()
+        }
+
         val sw = view.findViewById<Switch>(R.id.swTerminal)
         sw.isChecked = Prefs.showTerminal
         sw.setOnCheckedChangeListener { _, checked ->
             Prefs.setShowTerminal(this, checked)
             applyTerminalVisibility()
+        }
+        // 设备名（ADR-064）：Set → 经 GagaService 组 set_name 本地信令下发到
+        // 设备 NVS。名字的权威存储在设备端，App 不存（哑管道纪律）
+        val etName = view.findViewById<EditText>(R.id.etDevName)
+        view.findViewById<Button>(R.id.btnSendName).setOnClickListener {
+            val name = etName.text.toString().trim()
+            if (name.isEmpty()) {
+                Toast.makeText(this, "名字不能为空", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            startService(
+                Intent(this, com.gagaai.app.service.GagaService::class.java)
+                    .setAction(com.gagaai.app.service.GagaService.ACTION_SEND_NAME)
+                    .putExtra("name", name))
+            Toast.makeText(this, "已发送到嘎嘎，下一条消息生效", Toast.LENGTH_SHORT).show()
         }
         // 电池白名单状态实时显示（打开对话框的一瞬读一次）
         val whitelisted =
@@ -439,11 +563,7 @@ class MainActivity : Activity(), BridgeState.Listener {
         if (!state.serviceRunning) {
             dialog.setPositiveButton("Start service") { _, _ -> startBridgeService() }
         } else if (UiStyle.mark(state.mqttStatus) == "❌") {
-            dialog.setPositiveButton("Check server") { _, _ ->
-                serverEditArea.visibility = View.VISIBLE
-                serverEditToggle.text = "Collapse ▴"
-                pageScroll.post { pageScroll.smoothScrollTo(0, serverStatusRow.top.coerceAtLeast(0)) }
-            }
+            dialog.setPositiveButton("Check server") { _, _ -> showSettingsDialog() }
         } else {
             dialog.setPositiveButton("Got it", null)
         }
@@ -709,11 +829,37 @@ class MainActivity : Activity(), BridgeState.Listener {
         ) {
             Toast.makeText(this, "Missing permissions break BLE scan / notifications", Toast.LENGTH_LONG).show()
         }
+        // WiFi 列表选择：授权成功自动重试弹列表；被"拒绝且不再询问"→ 直达系统设置
+        if (requestCode == REQ_PICK_WIFI) {
+            val pairs = permissions.zip(grantResults.toTypedArray())
+            android.util.Log.d("gaga.wifi",
+                "权限回调：" + pairs.joinToString { (p, g) -> "$p=$g" })
+            val allGranted = grantResults.isNotEmpty() &&
+                grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+            if (allGranted) {
+                pendingWifiPick?.let { pickWifiSsid(it) }
+            } else if (pendingWifiPick != null) {
+                val blocked = permissions.any {
+                    !shouldShowRequestPermissionRationale(it)
+                }
+                if (blocked) {
+                    Toast.makeText(this, "权限被永久拒绝，带你去系统设置手动开", Toast.LENGTH_LONG).show()
+                    try {
+                        startActivity(Intent(
+                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:$packageName")))
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            pendingWifiPick = null
+        }
     }
 
     companion object {
         private const val REQUEST_PERMISSIONS = 1001
         private const val REQUEST_PAIR = 1002
+        private const val REQ_PICK_WIFI = 1003
         private const val NAME_FALLBACK = "GAGA"
     }
 }

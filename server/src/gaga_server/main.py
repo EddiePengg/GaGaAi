@@ -11,6 +11,7 @@ from .channels.base import ChannelError
 from .config import load_config
 from .http_api import create_app
 from .mqtt_bridge import MqttBridge
+from .notify import NotifyPusher
 from .pipeline import Pipeline
 from .providers import ProviderRegistry
 from .session import SessionManager
@@ -115,9 +116,13 @@ def main() -> None:
                     "reply 仅可经 /debug/reply 注入", channel.name, e)
 
     app = create_app(cfg, pipeline, publish_json=bridge.publish_json,
-                     registry=registry)
+                     registry=registry,
+                     notify_pusher=NotifyPusher(
+                         cfg, publish_json=bridge.publish_json,
+                         publish_audio=bridge.publish_audio,
+                         downlink=bridge.downlink))
     log.info("HTTP 调试口就绪: POST http://%s:%d/debug/audio | /debug/reply | "
-             "GET/POST /debug/providers", cfg.http_host, cfg.http_port)
+             "/notify | GET/POST /debug/providers", cfg.http_host, cfg.http_port)
     uvicorn.run(app, host=cfg.http_host, port=cfg.http_port, log_level="warning")
 
 

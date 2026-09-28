@@ -5,11 +5,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.media.MediaPlayer
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.Settings
 import com.gagaai.app.MainActivity
 import com.gagaai.app.ble.BleManager
@@ -38,6 +42,7 @@ class GagaService : Service() {
         const val ACTION_STOP = "com.gagaai.app.action.STOP"
         const val ACTION_BROKER_CHANGED = "com.gagaai.app.action.BROKER_CHANGED"
         const val ACTION_SEND_WIFI = "com.gagaai.app.action.SEND_WIFI"
+        const val ACTION_SEND_NAME = "com.gagaai.app.action.SEND_NAME"
 
         private const val CHANNEL_ID = "gaga_bridge"  // 新 id：旧渠道重要性不可改
         private const val NOTIFICATION_ID = 1
@@ -54,6 +59,37 @@ class GagaService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var bleManager: BleManager? = null
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+
+    // ---- 静默音频保活（2026-09-28）：灭屏后循环播放无声 wav ----
+    // 原理：ColorOS 灭屏杀"无活动后台应用"的连接（socket abort + BLE 断链，
+    // 进程本体不死）。进程持音频焦点 = 系统眼里的"媒体活跃"，对断网/断连
+    // 显著手软（酷狗/QQ 音乐常驻的同款待遇）。音量 0 无感知，CPU 开销可忽略。
+    private var silentPlayer: MediaPlayer? = null
+
+    private fun startSilentAudio() {
+        if (silentPlayer != null) return
+        silentPlayer = MediaPlayer.create(this, com.gagaai.app.R.raw.silent)?.apply {
+            isLooping = true
+            setVolume(0f, 0f)
+            start()
+        }
+        BridgeState.log("Silent audio on (screen off)")
+    }
+
+    private fun stopSilentAudio() {
+        silentPlayer?.let { runCatching { if (it.isPlaying) it.stop() } ; it.release() }
+        silentPlayer = null
+        BridgeState.log("Silent audio off (screen on)")
+    }
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> startSilentAudio()
+                Intent.ACTION_SCREEN_ON -> stopSilentAudio()
+            }
+        }
+    }
 
     /** MQTT 最新状态（null=尚未连过）。连/断即刻经 BLE 推给设备（ADR-038）。 */
     @Volatile
@@ -93,6 +129,22 @@ class GagaService : Service() {
         KeepAlive.armWatchdog(this)  // 保活第二条命：15 分钟看门狗自续期
         BridgeState.log("Service started（WiFi 锁已持有）")
 
+        // 屏幕状态监听（动态注册，Android 8+ 不支持静态注册屏幕广播）：
+        // 灭屏起播无声音乐，亮屏停。服务启动时若已灭屏（用户没开屏直接
+        // 被伴生/看门狗拉起），立即起播不遗漏。
+        val screenFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(screenReceiver, screenFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(screenReceiver, screenFilter)
+        }
+        if (!(getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive) {
+            startSilentAudio()
+        }
+
         // MqttManager 是进程级单例（ADR-039）：服务重建不再新建客户端，
         // 杜绝同一 Client ID 多连接并发互踢（session taken over 乒乓）
         MqttManager.onDownlink = { bytes ->
@@ -129,6 +181,18 @@ class GagaService : Service() {
                 val json = intent?.getStringExtra("json") ?: ""
                 if (json.isNotEmpty()) bleManager?.writeLocalSignal(json)
             }
+            ACTION_SEND_NAME -> {
+                // 设备显示名下发（ADR-064）：组 set_name 本地信令经 BLE 直达
+                // 设备存 NVS。JSONObject 负责转义——名字是用户随手输入的文本
+                val name = intent?.getStringExtra("name")?.trim() ?: ""
+                if (name.isNotEmpty()) {
+                    val json = org.json.JSONObject()
+                        .put("type", "set_name")
+                        .put("name", name)
+                        .toString()
+                    bleManager?.writeLocalSignal(json)
+                }
+            }
             ACTION_BROKER_CHANGED -> {
                 Prefs.load(this)
                 BridgeState.log("Broker changed, reconnecting MQTT")
@@ -161,6 +225,8 @@ class GagaService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        runCatching { unregisterReceiver(screenReceiver) }
+        stopSilentAudio()
         if (wifiLock?.isHeld == true) wifiLock?.release()
         BridgeState.removeListener(stateListener)
         bleManager?.stop()

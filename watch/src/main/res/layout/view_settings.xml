@@ -59,6 +59,14 @@
             android:hint="watch-01"
             android:inputType="text" />
 
+        <TextView style="@style/FieldLabel" android:text="署名（群里显示的名字）" />
+
+        <EditText
+            android:id="@+id/etDevName"
+            style="@style/FieldInput"
+            android:hint="手表嘎嘎"
+            android:inputType="text" />
+
         <TextView style="@style/SectionHeader" android:text="声音" />
 
         <TextView

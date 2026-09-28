@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from .config import Config
 from .pipeline import Pipeline
 from .textfmt import flatten_markdown
+from .tts import TTSError
 
 if TYPE_CHECKING:
     from .providers import ProviderRegistry
@@ -33,8 +34,15 @@ class ProviderBody(BaseModel):
     provider: str | None = None  # null/空 = 清除运行时覆盖，回落环境变量
 
 
+class NotifyBody(BaseModel):
+    device: str
+    text: str
+    voice: str | None = None  # 缺省 = TTS_VOICE
+
+
 def create_app(cfg: Config, pipeline: Pipeline, publish_json=None,
-               registry: "ProviderRegistry | None" = None) -> FastAPI:
+               registry: "ProviderRegistry | None" = None,
+               notify_pusher=None) -> FastAPI:
     app = FastAPI(title="gaga-server", version="0.1.0")
 
     @app.get("/healthz")
@@ -92,5 +100,28 @@ def create_app(cfg: Config, pipeline: Pipeline, publish_json=None,
         flat = flatten_markdown(body.text)
         publish_json({"type": "reply", "text": flat})
         return {"ok": True, "text": flat}
+
+    @app.post("/notify")
+    async def notify(body: NotifyBody):
+        """主动 TTS 语音通知：notify 信令 → 节流音频帧 → notify_end（设备语音播报）。
+
+        TTS 同步执行（线程池），音频推送在 daemon 线程节流下发；
+        同刻只容一路通知音频——占线 429，TTS 失败 502。
+        """
+        if notify_pusher is None:
+            raise HTTPException(status_code=503, detail="notify 未就绪")
+        if not body.device.strip() or not body.text.strip():
+            raise HTTPException(status_code=400,
+                                detail={"code": "BAD_REQUEST",
+                                        "msg": "device/text 必填"})
+        try:
+            result = await asyncio.to_thread(notify_pusher.push, body.device,
+                                             body.text, body.voice)
+        except TTSError as e:
+            raise HTTPException(status_code=502,
+                                detail={"code": "TTS_FAIL", "msg": str(e)})
+        if not result.get("ok"):
+            raise HTTPException(status_code=429, detail=result)
+        return result
 
     return app

@@ -25,8 +25,10 @@ CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 # 的"小块内部优先"让它们绕过 SPIRAM_MALLOC_RESERVE_INTERNAL 的 32KB DMA 保留，
 # 把内部堆吃到 6.6KB——SPI 刷屏反弹缓冲（466×10×2≈9.3KB，MALLOC_CAP_DMA）分不出来，
 # 真机报满屏 "Draw bitmap failed: ESP_ERR_NO_MEM"。现在小块也落 PSRAM，内部留给 DMA。
+# 2026-09-27 内存专项 256→64：LVGL 上百个小对象（65~256B 档）全部去 PSRAM，
+# 内部只留 64B 以下的极小分配。预期再省 5~10KB 内部 RAM；若 UI 手感变卡，一行改回。
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=256
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=64
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
@@ -42,6 +44,19 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # ---- 蓝牙：NimBLE host（IDF 内置 bt 组件；对应 Arduino 线 ADR-011 的 NimBLE 选型）----
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
+
+# ---- 蓝牙控制器裁剪（2026-09-27 内存专项，ADR-039 互斥的前提）----
+# 设备只是"被手机连"的纯外设：CENTRAL（主动连别人）/OBSERVER（扫描）/扩展扫描/
+# 周期同步全部不用，控制器按上限预分配的内存全省。MAX_ACT 6→3（广播+2 条连接：
+# 手机+笔记本同连可活）；MAX_CONNECTIONS 3→2。
+# ⚠️ 软件共存（coex）必须关（ESP_COEX_SW_COEXIST_ENABLE，见下方 WiFi 段）——不关会
+# 在 BT 控制器 emi.c:164 断言死循环（2026-09-27 实锤，与 PHY 开关无关）。
+# CONFIG_BT_NIMBLE_ROLE_CENTRAL is not set
+# CONFIG_BT_NIMBLE_ROLE_OBSERVER is not set
+# CONFIG_BT_NIMBLE_EXT_SCAN is not set
+# CONFIG_BT_NIMBLE_ENABLE_PERIODIC_SYNC is not set
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+CONFIG_BT_CTRL_BLE_MAX_ACT=3
 
 # ---- LVGL 9（BSP 经 esp_lvgl_adapter 拉起；裁剪自官方 demo 的 LVGL 配置块）----
 CONFIG_LV_USE_CLIB_MALLOC=y
@@ -63,10 +78,16 @@ CONFIG_LV_TXT_BREAK_CHARS=" ,.;:-_"
 # BSP 作者只测过默认值；音频/显示初始化失败会以 assert 形式暴露，bring-up 期反而更好排查）
 
 # ---- esp-sr 语音唤醒（ADR-032）----
-CONFIG_SR_WN_WN9_HILEXIN=y   # 唤醒词"Hi,乐鑫"（你好乐行）；Hi,ESP/你好小智备选模型也在库内
+# CONFIG_SR_WN_WN9_HILEXIN is not set   # 2026-09-28：2.5.4 下 hilexin 打包疑似损坏（issue #142 同款），换 wn9s_nihaoxiaozhi
+# CONFIG_SR_WN_WN9S_NIHAOXIAOZHI is not set
+CONFIG_SR_WN_WN9_JARVIS_TTS=y   # 唤醒词"Jarvis"（用户钦定；TTS 合成模型）
 
 # 内存体检（'h' 命令）：任务栈水位需要遍历任务表（2026-09-25 内存事故后的观测能力）
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# TWDT 触发即 panic（打印肇事任务名+backtrace 后复位）—— freeze 取证刚需：
+# 只复位不打印 = 每次 freeze 都不知道谁 wedge（2026-09-28 实教训）
+CONFIG_ESP_TASK_WDT_PANIC=y
 
 # NimBLE 内存走 PSRAM 外挂（2026-09-25：片上被 BLE 吃掉几十 KB 是刷屏 NO_MEM
 # 与滚动卡顿的共同根源；NimBLE 官方支持 external 分配，吞吐无损）
@@ -74,7 +95,41 @@ CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 
 # ---- WiFi 直连 MQTT 的内存瘦身（家模式，ADR-039 B 期）----
 # 单 binary 里 WiFi/lwIP/mqtt 的静态 BSS 必然链接进来，能省则省：
-CONFIG_LWIP_MAX_SOCKETS=6
+CONFIG_LWIP_MAX_SOCKETS=3
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=12
+# RX_BA_WIN 必须 ≤ 2×STATIC_RX_BUFFER_NUM（wifi_init.c 编译期硬检查）；
+# 瘦内存把静态 RX 砍到 4 后默认 16 超标。MQTT 信令不需要块确认聚合，6 足够。
+CONFIG_ESP_WIFI_RX_BA_WIN=6
+# 第二轮瘦身（2026-09-27 家模式实测 esp_wifi_init NO_MEM 后）：
+# 设备只跑 MQTT 信令（小包低频），以下默认大户全部砍掉——
+# CACHE_TX_BUFFER 32→4（TCP 发送缓存，默认 32 份是吞吐取向）
+# AMPDU TX/RX 关（聚合传输，信令场景零收益，还带走 BA 重排缓冲）
+# SOFTAP 关（只用 STA；softAP 结构体全省）
+# 静态 RX 6→4、动态 RX 16→8、动态 TX 12→8（各 ~1.6KB/份，内部 RAM）
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=4
+# 漏网之鱼（2026-09-27 DEBUG 日志实锤）：STATIC_TX_BUFFER_NUM 默认 16
+# （16×1600B≈26KB），是 wifi init 最大单项，先吃饱导致 static RX 分不出 →
+# init 整体 ESP_ERR_NO_MEM。砍到 4（MQTT 信令绰绰有余）。
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=4
+# CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
+# CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
+# CONFIG_ESP_WIFI_SOFTAP_SUPPORT is not set
+# ⚠️ 软件共存关 + WiFi IRAM 三个加速关——这两个是 BT 控制器 emi.c:164 断言
+# （crash loop）的根治组合（2026-09-27 三轮二分实锤）：
+# ① WiFi 链入后 IRAM_OPT 默认开，WiFi 代码驻 IRAM 吃掉 ~26KB 本可作堆的 SRAM，
+#    堆起点从 163KB 跌到 120KB；蓝牙控制器初始化申请内存池（断言 param 0x7800/
+#    0x8c00 = 30/35KB 整数 KiB 实锤）分不到 → 断言重启。
+# ② 共存本设计用不上（互斥运行），关掉无害还省内存；但单关不够，IRAM 才是大头。
+# WiFi 代码走 Flash 执行：MQTT 信令延迟无感，吞吐换内存。
+# CONFIG_ESP_COEX_SW_COEXIST_ENABLE is not set
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_SLP_IRAM_OPT is not set
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# CONFIG_LWIP_IPV6 is not set
+# CONFIG_ESP_WIFI_NVS_ENABLED is not set

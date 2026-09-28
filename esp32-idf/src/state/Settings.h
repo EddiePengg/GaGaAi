@@ -77,6 +77,17 @@ public:
     void setMqtt(const char* host, int port);
     const char* mqttHost() const { return mqttHost_; }
     int mqttPort() const { return mqttPort_; }
+    // MQTT 鉴权（ADR-061 broker 开密码后设备直连必须带）：user/pass 可空
+    // （空 = 匿名，仅兼容未开鉴权的内网 broker）
+    void setMqttAuth(const char* user, const char* pass);
+    const char* mqttUser() const { return mqttUser_; }
+    const char* mqttPass() const { return mqttPass_; }
+    // 链路模式偏好（ADR-065 后续：0=Auto 1=强制BLE 2=强制WiFi，NVS 持久化，
+    // LinkManager 开机读取；设置页/串口 'N' 共用）
+    static constexpr int LINK_MODE_COUNT = 3;
+    static constexpr const char* LINK_MODE_LABELS[] = {"自动", "外出·BLE", "在家·WiFi"};
+    int  linkMode() const { return linkMode_; }
+    void setLinkMode(int m) { if (m >= 0 && m < LINK_MODE_COUNT) linkMode_ = m; }
     // 对话引擎（ADR-035）：档位下标 + 信令用的 provider 值
     int talkProviderIndex() const { return talkProviderIdx_; }
     void setTalkProviderByIndex(int idx);   // 越界忽略
@@ -103,6 +114,9 @@ private:
     char     devName_[33] = {};   // 设备显示名（群里署名；空=用 DEVICE_ID）
     char     mqttHost_[64] = {};
     int      mqttPort_ = 1883;
+    char     mqttUser_[32] = {};
+    char     mqttPass_[64] = {};
+    int      linkMode_ = 0;      // 0=Auto 1=BLE 2=WiFi（NVS 持久化）
     bool     wifiEnabled_ = false;
 };
 

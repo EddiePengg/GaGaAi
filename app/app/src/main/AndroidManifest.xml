@@ -22,6 +22,14 @@
     <!-- 部分机型 BLE 扫描仍要求定位 -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- WiFi 列表读取（API 33+ 的 getScanResults 走"附近设备"权限——
+         ColorOS 实测缺它扫描结果对 App 返回空表，2026-09-27） -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+    <!-- Wi-Fi 扫描三件套的另外两件（安装级权限）：ACCESS_WIFI_STATE 管
+         getScanResults，CHANGE_WIFI_STATE 管 startScan（缺它抛 SecurityException，
+         缓存刷不了 → 列表永远空，2026-09-27 实锤） -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

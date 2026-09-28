@@ -47,6 +47,9 @@ public:
 
     // 松手发送：头部插入占位卡（Sending），最旧一条被顶掉。返回新卡下标（0）
     int addSending();
+    // 服务器主动通知建卡（notify 信令）：头部插入"GAGA 提醒"卡，直接 Replied
+    //（无问只有答；ask 槽借来放来源标签，UI 复用现有问答卡样式）。返回卡下标
+    int addNotify(const char* text);
     // receipt：填 ASR 文本 + 平台 msg_id，Sending → Waiting。返回卡下标（-1 = 无匹配）
     int fillAsk(const char* text, const char* msgId = "");
     // reply：优先按 reply_to（= receipt 存过的 msg_id）精确配对，无匹配退回

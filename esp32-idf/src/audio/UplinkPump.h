@@ -51,6 +51,25 @@ private:
     // 或本段见过断链）= 标记待补发；链路恢复按段重放（断点续传，已完成
     // 段不重发）。容量上限 ≈2.6MB（约 8 分钟语音），到顶停止追加但录音照常。
     void watchRecState();
+    // ---- 静音自动收尾（2026-09-28：跳动误触录 10 分钟事故的安全网）----
+    // 泵主循环逐帧统计能量（仅录音态）：连续静音超窗/超时 → 置标志，
+    // Recorder::tick 里执行 autoFinish（discard=整段几乎无语音 → 静默撤销）。
+    void watchVoice(uint32_t rms);
+public:
+    bool   autoStopReq() const  { return autoStopReq_; }
+    bool   autoDiscard() const  { return autoDiscard_; }
+    void   autoStopClear()      { autoStopReq_ = false; autoDiscard_ = false; }
+private:
+    static constexpr uint32_t SILENCE_RMS_THR = 180;    // 16bit PCM 静音门限（2026-09-28 误丢弃事故后下调：350 把正经说话误判无声；rmsAvg 日志标定后定终值）
+    static constexpr uint32_t SILENCE_STOP_MS = 8000;   // 连续静音 8s 自动收尾
+    static constexpr uint32_t MIN_VOICE_MS    = 300;    // 整段有效语音 <300ms → 静默丢弃（只丢纯噪声/误触）
+    static constexpr uint32_t MAX_REC_MS      = 180000; // 单段硬顶 3 分钟
+    volatile bool autoStopReq_  = false;
+    volatile bool autoDiscard_  = false;
+    uint32_t silenceRunMs_   = 0;
+    uint32_t voicedMs_       = 0;
+    uint32_t sessionStartMs_ = 0;
+    uint32_t recFrames_      = 0;
     void capAppend(const uint8_t* pkt, uint16_t n);
     void capMarkSegment();   // 缓存流插 0xFFFF 分界：多条离线消息不粘连
     void capClear();

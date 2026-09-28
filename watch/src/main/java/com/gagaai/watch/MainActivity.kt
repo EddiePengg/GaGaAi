@@ -92,6 +92,7 @@ class MainActivity : Activity() {
     private lateinit var etMqttUser: EditText
     private lateinit var etMqttPass: EditText
     private lateinit var etDeviceId: EditText
+    private lateinit var etDevName: EditText
 
     private lateinit var tvDetailTime: TextView
     private lateinit var tvDetailAsk: TextView
@@ -104,6 +105,7 @@ class MainActivity : Activity() {
     private lateinit var shake: ShakeDetector
 
     private var deviceId = "watch-01"
+    private var devName = ""   // 群里署名（ADR-064）；空 = 服务端回退设备 ID
     private var brokerHost = ""
     private var brokerPort = 1883
     private var mqttUser = ""      // MQTT 鉴权（ADR-061：公网暴露必填；空=匿名）
@@ -260,10 +262,12 @@ class MainActivity : Activity() {
         etMqttUser = findViewById(R.id.etMqttUser)
         etMqttPass = findViewById(R.id.etMqttPass)
         etDeviceId = findViewById(R.id.etDeviceId)
+        etDevName = findViewById(R.id.etDevName)
     }
 
     private fun loadPrefs() {
         deviceId = prefs.getString("device_id", Build.MODEL?.replace(' ', '-')?.lowercase() ?: "watch-01") ?: "watch-01"
+        devName = prefs.getString("dev_name", "") ?: ""
         brokerHost = prefs.getString("broker_host", "") ?: ""
         brokerPort = prefs.getInt("broker_port", 1883)
         mqttUser = prefs.getString("mqtt_user", "") ?: ""
@@ -423,7 +427,7 @@ class MainActivity : Activity() {
         renderCards()
         recStartAtUptimeMs = SystemClock.uptimeMillis()
         // rec_start 先于音频帧：服务端据此开流式 ASR（session.py）
-        MqttManager.publishUplink(Frame.encodeJson(Signaling.recStart(deviceId)))
+        MqttManager.publishUplink(Frame.encodeJson(Signaling.recStart(deviceId, devName)))
         recorder.start()
         sounds.quack()          // 开录"嘎"（用户定稿）
         log("rec_start")
@@ -519,7 +523,7 @@ class MainActivity : Activity() {
     }
 
     private fun sendHello() {
-        MqttManager.publishUplink(Frame.encodeJson(Signaling.hello("gaga-$deviceId", appVersion())))
+        MqttManager.publishUplink(Frame.encodeJson(Signaling.hello("gaga-$deviceId", appVersion(), devName)))
     }
 
     private fun handleSignaling(obj: JSONObject) {
@@ -754,6 +758,7 @@ class MainActivity : Activity() {
         etMqttUser.setText(mqttUser)
         etMqttPass.setText(mqttPass)
         etDeviceId.setText(deviceId)
+        etDevName.setText(devName)
         refreshLocalIps()
         findViewById<TextView>(R.id.btnSoundToggle).text =
             "提示音        [ ${if (soundsEnabled) "开" else "关"} ]"
@@ -821,12 +826,14 @@ class MainActivity : Activity() {
         mqttUser = etMqttUser.text.toString().trim()
         mqttPass = etMqttPass.text.toString()
         deviceId = etDeviceId.text.toString().trim().ifEmpty { deviceId }
+        devName = etDevName.text.toString().trim()
         prefs.edit()
             .putString("broker_host", brokerHost)
             .putInt("broker_port", brokerPort)
             .putString("mqtt_user", mqttUser)
             .putString("mqtt_pass", mqttPass)
             .putString("device_id", deviceId)
+            .putString("dev_name", devName)
             .apply()
         MqttManager.stop()
         MqttManager.clientId = "watch-$deviceId"

@@ -1670,3 +1670,130 @@ receipt/reply 下行显示、对账轮询（`rec_status_query` 10s 一次）、�
   （EMQX Cloud 免费档自带 TLS+鉴权，还是免家宽公网 IP 的替代路径）。
 - **代价（明示）**：明文 TCP 上密码可被链路嗅探（接受，见上）；多设备
   共用一套账号（够用，不做 per-device 凭据与 ACL）。
+
+## ADR-064：设备显示名——name 字段贯穿信令，群里署名去 ID 化
+
+- **日期**：2026-09-27
+- **背景**：胸前嘎嘎（`gaga-01`）和手表（`gaga-oww231`）发进群的消息署名
+  都是设备 ID，肉眼几乎分不清谁说的。用户要求：ESP32 的名字在手机 App
+  里设置、手表的名字在手表 APK 里设置，发消息用各自的名字。
+- **选择**：**名字的权威存储在设备端**——ESP32 存 NVS（`dname` 键，
+  32B，JSON 安全化后落盘），手表存本地 prefs。`hello` / `rec_start`
+  信令携带 `name` 字段，服务端 session 记账（随段刷新 = 改名即时生效），
+  投递进群时署名 `🦆 [名字] 内容`，无 name 回退 device ID（旧行为）。
+  手机 App 的设置入口只做一件事：把用户输入组成 `set_name` **本地信令**
+  经 BLE 发给设备（同 ADR-039 wifi_cfg 模式）——哑管道纪律不破，App
+  不解析不修改任何转发流量，也不在自己侧存储名字。
+- **理由**：署名属于"设备是谁"的自描述，与 device ID 同源同路；放设备端
+  让 App / 服务器 / 手表三端都不需要额外的名字同步协议。rec_start 随段
+  刷新让改名免重连生效（hello 只在连接建立时发一次）。
+- **代价**：旧固件/旧手表无 name 字段 = 回退 ID 署名（行为不变，无破坏）；
+  set_name 走 BLE 本地信令 = 设置时设备必须在蓝牙范围内。
+
+## ADR-065：家模式互斥落地——内存专项 + LinkManager 自动故障转移（2026-09-27 深夜，fw-idf 0.6.0）
+
+- **背景**：WiFi 直连 MQTT（ADR-039 B 期）代码早备但从未编译进固件（"内存不足"
+  搁置）；9/27 实测内部 RAM 只剩 13.5KB（9/25 后新功能吃掉 ~28KB）。用户拍板：
+  今晚必须让家模式跑通，ESP-SR 明天。
+- **选择**：
+  - **内存四刀**（全部配置级）：① BLE 控制器裁剪（CENTRAL/OBSERVER/EXT_SCAN/
+    PERIODIC_SYNC 关、MAX_ACT 6→3、连接 3→2；PHY 开关与共存耦合，保留）；
+    ② `SPIRAM_MALLOC_ALWAYSINTERNAL` 256→64（LVGL 小块去 PSRAM）；
+    ③ WiFi 瘦身（CACHE_TX 32→4、**STATIC_TX 16→4**（26KB 大象，DEBUG 日志实锤）、
+    AMPDU TX/RX 关、SOFTAP 关、静态 RX 6→4、动态 RX 16→8/TX 12→8、RX_BA_WIN=6）；
+    ④ **关 WiFi IRAM 三件套**（`ESP_WIFI_IRAM_OPT/RX_IRAM_OPT/SLP_IRAM_OPT`，
+    代码走 Flash 执行）+ 关软件共存（`ESP_COEX_SW_COEXIST_ENABLE`）。
+  - **LinkManager（新 net/ 模块）**：`Link` 代理 + 故障转移状态机。
+    业务侧永远只面对它（ctx.link 永不变，TalkSession 缓存指针问题消解）。
+    Auto 策略：BLE 断 grace 60s → 切 WiFi（凭证存在即意图）；
+    WiFi 30s 起不来 / 掉线 90s → 回 BLE。手动 = 串口 'N' 循环
+    Auto→强制BLE→强制WiFi。
+  - **可逆拆栈**：`GattServer::end()`（nimble_port_stop→等 host 任务自删→
+    deinit，host+控制器 5.5.3 打包语义）+ `WifiTransport::end()`
+    （先注销回调→断连停射频→150ms→deinit）。不碰 mem_release（单程票）。
+- **踩坑实录（按轮次，含错误归因的自我纠正）**：
+  1. `emi.c:164` 启动断言死循环 → 真根因 **WiFi IRAM 偷 ~26KB SRAM**，
+     蓝牙控制器内存池（断言 param 0x7800/0x8c00=整 30/35KiB 实锤）分不到。
+     中途误判过 PHY/共存（相关性≠因果性教材案例）。
+  2. `wifi_init.c` 编译期硬检查：`RX_BA_WIN ≤ 2×STATIC_RX_BUFFER_NUM`。
+  3. `esp_wifi_init: ESP_ERR_NO_MEM` 而堆有 43KB → DEBUG 日志（'G' 命令）实锤
+     STATIC_TX_BUFFER_NUM 默认 16（25.6KB）先吃饱致 RX 分不出——"堆不够"理论
+     被数据推翻，真凶是非堆的单项配置。
+  4. `'w'` 写配置必崩 → 串口任务栈在 PSRAM，NVS 写 Flash 冻结缓存时
+     `s_task_stack_is_sane_when_cache_frozen` 断言。**执行 Flash 写入的任务
+     栈必须在内部 RAM**——串口任务迁回内部 4KB。
+  5. 预热（init→deinit 整堆）引发 use-after-free（异步连接撞拆卸）→ 改无射频
+     预热 → 最终**整个退役**（deinit 有已知泄漏，每开机漏一次，基线 13.8→6.4KB）。
+  6. **跨版本幽灵崩溃**（拿到 IP 后 1s 必重启）→ 全量无过滤抓包 + addr2line：
+     `wifiEvent` 注册时第四个参数（handler_args）传了 `nullptr`，回调里
+     `static_cast<WifiTransport*>(handler_args)` = 空 this，GOT_IP/ST A_DISCONNECTED
+     事件一来即 StoreProhibited。**所有轮次的重启全由此一个 bug 引起**。
+  7. PIO 行为修正：`sdkconfig.defaults` 改动**不会**同步进已生成的 sdkconfig——
+     需删生成物重生成，或直接改生成物（defaults 保持权威，防下次回退）。
+- **实测（0.6.0 真机）**：BLE 外出 9.7KB 空闲（刷屏缓冲 10 行→4 行，9.3KB→3.7KB，
+  残影病防复发）；拆 BLE 腾 46KB；WiFi 全程 26KB，家模式（WiFi+IP+MQTT 常驻）
+  9.3KB 空闲；古镇营连接 + 192.168.88.125 + `MQTT 已连接，订阅 gaga/down`
+  全链路通；BLE↔WiFi 双向切换可逆，手机 4s 自动重连；全程零重启。
+- **协议变更**：`wifi_cfg` 信令扩展可选 `host`/`port`/`mqtt_user`/`mqtt_pass`
+  （protocol.md §3 已同步）；串口 `'w'` 为等价调试入口，`'N'` 切链路模式，
+  `'G'` 全局 DEBUG 日志开关（排障用）。
+- **放弃**：WiFi+BLE 共存（互斥架构下无用且省不出内存）；mem_release 彻底
+  释放（单程票，与可逆切换冲突）；PHY 裁剪（与共存/EMI 配置耦合，收益小）。
+- **下一步**：设置页链路状态显示 + 手动切换（规划已备）；APK WiFi 配置 UI
+  恢复（git 历史有，表单加 broker 字段）；LVGL 懒加载抬基线（ESP-SR 地基）。
+
+## ADR-066：服务器主动 TTS 语音通知——notify / notify_end 下行链路（2026-09-27 深夜）
+
+- **为什么做**：之前下行只有"被动回执"（receipt/reply，回应设备上行）和 talk 会话音频。
+  提醒类场景（"3 分钟后提醒我喝水"）需要**服务器主动、不经用户触发**给设备推语音，
+  roadmap 里"下行 TTS 播放"两次列为"本期不做"，本期（Hermes 到点提醒的前置）把它做了——
+  但做成通用 notify 通道，不绑死 reminder 业务：任意调用方 HTTP 触发。
+- **TTS 选型**：走 DashScope 非实时合成（`POST /api/v1/services/aigc/multimodal-generation/generation`），
+  原生 httpx、不引 SDK（对齐 qwen ASR 现有风格）。**用户点名的 Qwen-Audio-3.1-TTS 在本账号
+  实测报 "url error"（3.0/3.1 各端点、OpenAI 兼容端点、专属域名都试过，同请求换
+  qwen3-tts-flash 即 200）——判为账号未开通，非请求格式问题**。默认 `TTS_MODEL=qwen3-tts-flash`
+  （已验证可用），`TTS_VOICE=Cherry`；哪天账号开通了 3.1，改环境变量即换，代码零改动。
+- **为什么 ogg_opus 24k 透传**：设备侧 talk 下行播放链路（OggDemux+OpusDec+抖动缓冲）全套
+  现成，TTS wav 经 ffmpeg `-ac 1 -ar 24000 -c:a libopus -b:a 32k` 一转即同格式，固件播放侧
+  零新解码代码。（注意：Opus 规范头固定报 48000，实测与 M5 真实下行音频一致，勿按 ffprobe
+  采样率误判转码失败。）
+- **协议**：notify / notify_end 两个 JSON 信令界定音频流边界（不靠 ogg EOS，帧流可能丢尾），
+  均带 `device` 戳——多设备同 broker 非目标机忽略（固件 needsDevice 名单同步加 "notify" 前缀）。
+  notify 里带 `text`：即使音频没到（设备深睡/断链），文本消息卡也已上屏，通知不至于全丢。
+- **pacing**：2KB/帧、60ms/帧。一次性灌爆 BLE 会丢 notify（QoS1 只保到 App，BLE notify 不
+  保），talk 的 20ms 节奏器同款思路放慢版；设备抖动缓冲吸收突发。
+- **并发与失败语义**：同一时刻只允许一个通知下发（锁，占线 429 拒绝）——两条 TTS 语音同时
+  播放无意义且互相打断。TTS 失败同步返回 502（调用方多是定时任务，要确切知道成没成）；
+  音频帧推送放后台线程，HTTP 不等播放完成（提醒链路无人在等响应）。设备端双超时兜底：
+  末帧后 10s 无 notify_end / notify 后 10s 零帧，自动收尾断电。
+- **边界声明**：talk 会话中或录音中到达的 notify 只上屏不播语音（不做音频抢占——打断策略
+  留给真机体验后再定）；深睡设备天然收不到（与 reply 断链同理）；服务器暂无设备在线感知
+  （无 LWT），notify_end 级别的回执本期不做。
+- **落地**：server `tts.py`（合成/时长解析/转码）、`notify.py`（NotifyPusher）、`POST /notify`；
+  固件 `notify/NotifySession`（三态 Idle/Playing/Silent，播放泵 gaga_notify 复用 talk 范式）。
+
+## ADR-067：notify 真机联调双 bug 实录——分片首包 payload 漏收 + 下行插队（2026-09-28）
+
+ADR-066 的 notify 功能 server/固件两侧落地后，真机联调暴露两个**协议级** bug
+（都不在 notify 新代码里，是既有缺陷被 notify 的首个分片下行业务踩出来）：
+
+1. **FrameDecoder 分片首包 payload 漏收（潜伏至今）**：旧解码器读完分片首包头
+   （`type|0x80`，len=整帧总长）直接进"子包头"状态，但首包按协议自带 509B
+   payload——于是这 509B 被当子包头解析：ogg 流的 "OggS" 魔数被误读成
+   `02 00 00` 假帧，随后 Hunt/重扫在音频数据里连环误判，整流吞掉。表现为
+   notify "有卡有叮咚无声音"（BLE/WiFi 两条链路同病，曾被误判为 App 丢包）。
+   **为什么潜伏至今**：分片下行此前没有真实业务——reply/receipt 多为 <509B
+   单包帧（唯一分片使用者），M5 talk 下行音频从未真机验证过。
+   修法：首包按 509B 约定先收 payload 再进子包头（frame.cpp acceptHeader）。
+   **协议补白**（protocol.md §2）：首包 payload 恒 509B；分片帧内禁止插入
+   任何其他帧。
+2. **服务端下行可重入（线程间插队）**：30s 心跳线程与 NotifyPusher 音频线程
+   并发 publish 同一 topic，心跳单包帧插进音频分片流中间 = 协议级不可恢复
+   错位（真机实锤：3.46s 音频只播出 0.55s）。修法：MqttBridge 加 RLock
+   下行闸门，publish_json/publish_audio 逐次持锁，NotifyPusher 音频流全程
+   持锁，心跳/信令排队。
+
+**教训**：① 协议里"从未被真实业务使用过的路径"等于没有测试过——分片接收
+路径在协议文档里写了细则，但两端实现都是首次被 notify 音频（KB 级分片帧）
+真正走到；② 排查手段：设备侧 RX 逐包对账日志（wifirx/blerx，默认 ESP_LOGD，
+串口 'G' 开）+ 解码器 hdr 序列日志，两端字节对账一次定位，比猜快一个量级。

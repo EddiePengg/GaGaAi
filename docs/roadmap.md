@@ -67,6 +67,7 @@
   - 上行必须严格按真实节奏发帧；关麦须发 input_audio_mute.commit 事件（服务端已自动 mute/unmute 保活）
 
 ### M6：体验层（并行小任务）
+- [x] **服务器主动 TTS 语音通知（2026-09-27 深夜落地，2026-09-28 真机打通，ADR-066/067）**：`POST /notify` {device, text} → DashScope TTS（默认 qwen3-tts-flash，Qwen-Audio-3.1-TTS 账号未开通实测"url error"，改 TTS_MODEL 即换）→ ffmpeg 转 ogg_opus 24k → 下行 notify / 音频帧（2KB@60ms pacing，TTS_FRAME_INTERVAL 可调）/ notify_end → 固件 NotifySession 亮屏 + "GAGA 提醒"消息卡 + 叮咚 + 播放（复用 talk 下行播放链路）。**真机联调连修四 bug（fw-idf 0.7.2~0.7.8）**：notify 激活窗口丢帧（accepting_ 闸门）、解码器流错位吞流（Hunt 滑窗自救 + 8KB 上限）、**分片首包 payload 漏收（潜伏至今的协议级 bug，ogg "OggS" 被误读成假帧）**、server 下行心跳插队（RLock 串行化）。实测 3.46s 音频完整播放（包=173 pcm=83040 欠载=0 丢帧=0）。**WiFi 家模式直连 broker 已验证**；BLE 经 App 路径待 App 侧修复（ColorOS 冻结 + 写泵丢包，非本功能代码问题）
 - [x] **消息卡反馈闭环 UI（2026-09-24 fw-idf 0.3.0，ADR-028）**：消息卡列表主页（20 条 RAM 环形，点卡进详情）+ 顶部状态栏（时间/电量/BLE，圆屏收中央）+ 松手即时出卡（receipt 填 ASR 文本）+ reply 就地填充/息屏自动亮屏直达详情 + 叮咚双音 + Markdown 服务端拍平（textfmt.py）+ RTC 对时（信令 ts 自动校准）。字库扩 GB2312 全集 7448 字（flash ~1MB）。**2026-09-24 修破折号**：真机报障"——"显示不出——GB2312 映射的横线是 U+2015、AI 输出的是 U+2014，形同码异，字符集补 `—`(U+2014)/`–`(U+2013) 后重生成字库（覆盖 8061 码点，cmap 解析验证 ✓）。**配套：设备端文本过滤（ADR-032，fw 0.4.1）**——动态文本逐字符查本机字形表，渲染不了的原地剔除（emoji/字库外符号静默消失，不再方块）；FontFilter.cpp 已登记 CMakeLists，与并行开发线（motion/power/debug）无耦合，待整体构建回归。
 - [x] **接入端 channels/ 抽象 + 飞书全量官方 API（2026-09-24，ADR-030）**：发送 im/v1/messages（receipt 带 msg_id）+ 轮询收 Hermes 回复 → reply 下行；CHANNEL 环境变量选平台（微信/Telegram 三步接入法见 channels/__init__.py）；webhook 退役。**端到端已实测（探针）**：官方 API 发"适合骑车吗"→ Hermes 18s 回 post 富文本 → 轮询捕获 → on_message 全文到手（期间修掉 ListMessage 默认排序拉最旧页的坑，须 sort_type=Desc）；剩真机整体回归：重启 gaga-server 后设备消息卡点亮
 - [x] **深空黑正式主题 + 设备端设置系统（2026-09-24 fw-idf 0.4.0，ADR-031）**：UI 全面重设计——纯黑底（AMOLED 黑像素零功耗）+ 白主文字 + 鸭黄 accent，卡片 remove_style_all 自绘样式根除默认主题白边；状态栏重排贴圆顶（电量·BLE圆点 | 时间 montserrat_24 | 设置入口），与主体拉开 62px 呼吸区；设置页全触摸操作（音量/亮度 slider、息屏时长 5/10/30/60s 循环、提示音开关、关于页），Settings 模块 NVS 持久化（`state/Settings.cpp`）。真机验证：快照非黑像素 95%+（黄底）→ 31%（深色主题）；设置页五行渲染分带均匀分布 ✓；验证期间用户真实对话全链路（录音→ASR→飞书→Hermes→reply 下行）在新固件上正常跑通
@@ -75,9 +76,18 @@
 - [x] **导航模型定稿：右滑返回 + 鸭子页（2026-09-25，ADR-036）**：indev 级手势（LV_EVENT_GESTURE，与列表滚动共存）——首页左滑进鸭子页、子页面右滑返回；鸭子页=陪伴层（自绘扁平小鸭子 + 按时段问候 + 今日概览 + 最近回复气泡）；任务管理器明确不做（单应用无对象+与列表滚动冲突）。串口 'C'。**待真机**：手势手感/鸭子摆位
 - [x] **顶部下拉快捷面板（2026-09-25 fw-idf 0.5.0，ADR-035）**：顶部下滑/轻点呼出控制中心——亮度/音量大滑条 + 语音唤醒/字幕开关 + 收起；220ms 滑入动画、点外关闭、15s 自动收、录音/talk 让路；串口 'Q' 验证。**待真机**：手势阈值/右角分界手感
 - [x] **实时对话三优化（2026-09-25，ADR-034）**：服务器 realtime provider 化（归一化事件契约；volc 迁移完成、gemini Live 实现待 key 联调、"星辰"三步接入法）；固件"对话字幕"设置开关（防长文本重排卡顿，纯语音模式）；ASR 分层清屏（transcription.started → 空 talk_asr → 设备清上一句，叠字根治）
+- [x] **语音唤醒（2026-09-28 通宵 fw-idf 0.7.0，ADR-065 后续）**：WakeNet9 落地——
+  唤醒词 Jarvis（wn9_jarvis_tts，esp-sr 2.1.4，model 分区低地址 0x812000 治官方
+  issue #135 幽灵）；唤醒即开录 → 8s 静音自动收尾（<1s 有效语音静默丢弃）+ 3min
+  硬顶；AFE 走 MORE_PSRAM（运行仅 ~1KB 内部 RAM）；串口 W/设置页开关/开机自恢复
+  三端拉起；WiFi 模式拒绝开启（内存两家分不下）。待打磨：TTS 阈值标定、录音
+  让路竞态收紧、KWS 常开功耗实测。
 - [ ] AOD 表盘（黑底省电设计；深色主题已就位，AOD 是它的降亮度特例）
 - [ ] IMU 装饰效果（重力小球/粒子流）
-- [ ] 在家 WiFi 直连模式
+- [x] **在家 WiFi 直连模式（2026-09-27 深夜 fw-idf 0.6.0，ADR-065）**：WiFi+MQTT
+  直连上线——互斥架构（LinkManager 故障转移：BLE 死 60s→WiFi；WiFi 死 90s→BLE）、
+  可逆拆栈、WiFi 全链路实测通（连古镇营→DHCP→MQTT 订阅 gaga/down）。
+  待办：设置页模式显示/手动切换、APK 配置 UI 恢复、LVGL 懒加载抬内存基线
 - [x] LVGL 中文字体（2026-09-23 IDF 线：自生子集 C 数组字体入库 esp32-idf/src/ui/fonts/，OFL 思源黑体 886 字；没走 LittleFS——C 数组更稳；lv_font_conv 必须 --no-compress，ESP lvgl 9.4 不渲染 RLE 压缩位图。**2026-09-24 扩 GB2312 全集 7448 字**：ASR/回复动态文本任意汉字，886 子集必豆腐；≈1MB flash，lvgl 直接按 flash 映射地址读字模，运行时 RAM 零占用）
 
 ### M7：手表客户端——嘎嘎的"第二副身躯"（ADR-051，2026-09-26 开工）
@@ -101,6 +111,8 @@
 - [ ] 后台长连接保活加固
 
 ## 当前状态
+
+**fw-idf 0.7.8 + server（2026-09-28 上午真机收线）：notify 全链路打通**——服务器主动 TTS 语音通知实测完整播放（3.46s，零欠载零丢帧，ADR-066/067）。真机联调挖出并修复两个协议级潜伏 bug：分片帧首包 payload 漏收（解码器）+ 下行 publish 插队（server RLock 串行化）。WiFi 家模式直连 broker 验证通过；BLE 经 App 路径待 App 侧修复（ColorOS 熄屏冻结 HANS + BLE 写泵丢包，根因均已实锤，归 App 线）。
 
 **watch 0.3.0（2026-09-27，ADR-059/060）：交互定稿三连——物理键零接触、手势判据 v2、常亮+灭屏收尾。** 真机迭代节奏：0.2.6 修"只能发不能收"（下行分片重组）+ 调试页传感器恒 0；0.2.7 消息历史持久化（SharedPreferences JSON + 保留条数可配）；0.2.8 紧握 onNewIntent 路径（真机实测：紧握只在表盘态有效，路径保留但仅覆盖系统唤起）；0.2.9 物理键全部交回系统（白名单/拦截/MediaSession 删除）；0.3.0 判据升级**单轴反向交替双脉冲**（走路/骑车颠簸免疫）+ Window 级常亮 + 灭屏自动收尾发送。`watch/` 独立 Gradle 工程（ADR-051，与 `app/` 平级）。
 

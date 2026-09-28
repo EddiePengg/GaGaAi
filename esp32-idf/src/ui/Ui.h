@@ -38,6 +38,7 @@ public:
         AutoRotate,    // value = 0 关 / 1 开（自动转向：持握角变化内容跟着转）
         ScreenFlip,    // value = 0 正 / 1 反（屏幕方向手动固定；自动转向关着时生效）
         TalkProvider,  // value = Settings::TALK_PROVIDERS 下标（对话引擎，ADR-035）
+        LinkMode,      // value = Settings 链路模式下标（0 自动 / 1 外出·BLE / 2 在家·WiFi）
     };
     using SettingCallback = std::function<void(SettingKey, int)>;
 
@@ -52,6 +53,13 @@ public:
 
     // BLE 连接态变化 → 状态栏圆点（绿连 / 灰断）
     void setBleConnected(bool connected);
+
+    // 链路状态推送（main 从 LinkManager 轮询，变化时调；设置页"当前链路"行显示）
+    void setLinkStatus(const char* text);
+
+    // 状态栏推送（main 2s 节流）：链路模式文字+圆点色 / 内部剩余内存 KB
+    void setStatusLink(const char* mode, bool connected);
+    void setStatusMem(int freeKb);
 
     // MsgLog 变更后调用（receipt/reply/error/松手建卡）：重刷卡片或详情
     void onLogChanged();
@@ -89,6 +97,7 @@ private:
     void renderDetail();     // detailId_ → 详情页文本
     void renderStatus();     // 时间/电量/BLE
     void renderSettings();   // 设置页数值/关于信息（进页与每次改动后刷）
+    void buildSettings();    // 设置页懒构建（2026-09-28 内存测量）：首次 openSettings 才建
     View currentView() const;
 
     // 设置行的值落地：改 settings_ + 回调 applyCb_；save 落盘在拖动结束时做
@@ -101,12 +110,17 @@ private:
 
     // ---- 顶部状态栏 ----
     lv_obj_t* statusBar_ = nullptr;
-    lv_obj_t* timeLabel_ = nullptr;     // montserrat_24，白（视觉主角）
+    lv_obj_t* timeLabel_ = nullptr;     // montserrat_14（2026-09-28 改版缩小）
     lv_obj_t* battLabel_ = nullptr;     // CJK16
-    lv_obj_t* bleDot_    = nullptr;     // 10px 圆点：绿连 / 灰断
+    lv_obj_t* bleDot_    = nullptr;     // 10px 圆点：绿连 / 灰断（最左）
+    lv_obj_t* linkModeLabel_ = nullptr; // 链路模式文字 BLE/WiFi（绿点右侧）
+    lv_obj_t* memLabel_  = nullptr;     // 内部剩余内存 "32K"（最右，COL_SUB）
 
     // ---- 消息卡列表 ----
-    static constexpr int CARD_POOL = 20;  // 与 MsgLog::MAX_MSGS 一致
+    // ⚠️ 临时测量版（2026-09-28）：20 → 2——量卡片池的真实内部 RAM 成本
+    // （'h' 前后对比 ×18 = 每张卡的内部份额），为 Phase C 懒加载决策提供实测数。
+    // 副作用：列表只显示前 2 条消息。测完恢复 20 或做正式懒加载（按消息建卡）。
+    static constexpr int CARD_POOL = 2;  // 与 MsgLog::MAX_MSGS 一致的原值 = 20
     struct Card {          // 卡片七件套：容器 / 问行 / 时间 / 你问 / 答行 / 鸭图标+答 / 状态竖条
         lv_obj_t* cont;
         lv_obj_t* askRow;    // 首行横排：你问（伸展）+ 右上角时间（2026-09-27 定稿）
@@ -140,7 +154,10 @@ private:
     lv_obj_t* toLeft_       = nullptr;   // 息屏时长 < > 循环
     lv_obj_t* toVal_        = nullptr;
     lv_obj_t* toRight_      = nullptr;
-    lv_obj_t* wifiVal_      = nullptr;   // WiFi 配置状态显示
+    lv_obj_t* linkStatusVal_ = nullptr;  // 当前链路状态（main 推送：外出·BLE/在家·WiFi/切换中）
+    lv_obj_t* lmLeft_       = nullptr;   // 工作模式 < > 循环（自动/外出·BLE/在家·WiFi）
+    lv_obj_t* lmVal_        = nullptr;
+    lv_obj_t* lmRight_      = nullptr;
     lv_obj_t* prvLeft_      = nullptr;   // 对话引擎 < > 循环（ADR-035）
     lv_obj_t* prvVal_       = nullptr;
     lv_obj_t* prvRight_     = nullptr;

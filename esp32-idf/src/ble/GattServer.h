@@ -25,6 +25,12 @@ public:
     // 广播名前缀 "GAGA"；返回是否初始化成功
     bool begin(const char* namePrefix = "GAGA");
 
+    // 可逆拆栈（2026-09-27 家模式互斥，LinkManager 切换用）：停广播 → 断连 →
+    // nimble_port_stop → 等 host 任务自删 → nimble_port_deinit（host + 控制器
+    // 一起拆，5.5.3 打包语义）。不碰 esp_bt_controller_mem_release（单程票），
+    // 之后可随时重新 begin()。重复 end 幂等。
+    bool end();
+
     // 连接状态下按当前 MTU 分包发送；未连接返回 false（调用方自行记丢弃日志）
     bool sendFrame(uint8_t type, const uint8_t* payload, uint16_t len) override;
     bool sendJson(const char* json) override;  // JSON 文本包成 type=0x02 帧发给 App
@@ -60,6 +66,8 @@ private:
     uint16_t connHandle_   = 0xFFFF;    // 当前连接句柄（未连接时无效值）
     uint16_t mtu_          = DEFAULT_MTU;  // 协商后的 MTU，sendFrame 分包依据
     uint16_t txValHandle_  = 0;         // TX 特征值句柄（notify 用；host 启动后才回填）
+    bool     started_      = false;     // begin 成功过（end 的幂等守卫）
+    bool     stopping_     = false;     // 拆栈中：late 事件禁止触发恢复广播
     SemaphoreHandle_t sendMtx_ = nullptr;  // 发送互斥（app 任务/上行泵/talk 并发）
 
     FrameDecoder      decoder_;

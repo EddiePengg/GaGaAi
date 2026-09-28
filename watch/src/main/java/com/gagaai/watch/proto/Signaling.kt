@@ -11,20 +11,25 @@ import org.json.JSONObject
  */
 object Signaling {
 
-    /** 开机/重连后自我介绍，服务端据此回 hello_ack 并对时。 */
-    fun hello(device: String, fw: String): String =
-        JSONObject()
+    /** 开机/重连后自我介绍，服务端据此回 hello_ack 并对时。name=署名（ADR-064）。 */
+    fun hello(device: String, fw: String, name: String? = null): String {
+        val o = JSONObject()
             .put("type", "hello")
             .put("device", device)
             .put("fw", fw)
-            .toString()
+        if (!name.isNullOrBlank()) o.put("name", name)
+        return o.toString()
+    }
 
     /**
      * 开始录音。服务端收到才把会话置为 recording 并开启流式 ASR——
-     * 缺了它，音频帧到了也不知道往哪投。
+     * 缺了它，音频帧到了也不知道往哪投。name 随段刷新（改名即时生效）。
      */
-    fun recStart(device: String): String =
-        JSONObject().put("type", "rec_start").put("device", device).toString()
+    fun recStart(device: String, name: String? = null): String {
+        val o = JSONObject().put("type", "rec_start").put("device", device)
+        if (!name.isNullOrBlank()) o.put("name", name)
+        return o.toString()
+    }
 
     /**
      * 结束录音。duration_ms 是本次实录时长，服务端据此判断"帧数是否覆盖声明时长"

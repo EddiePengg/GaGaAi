@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
+#include "cJSON.h"
 #include "bsp/esp-bsp.h"
 #include "lvgl.h"
 
@@ -26,6 +27,7 @@
 #include "state/MsgLog.h"
 #include "state/Settings.h"
 #include "talk/TalkSession.h"
+#include "net/LinkManager.h"
 #include "ui/Display.h"
 #include "ui/Ui.h"
 #include "voice/KeywordWake.h"
@@ -36,16 +38,23 @@ namespace gaga {
 
 static const char* TAG = "gaga.serial";
 
+static bool s_logVerbose = false;  // 'G'：全局日志 DEBUG 开关（排障用）
+
 void SerialCmd::begin(AppContext* ctx) {
     ctx_ = ctx;
-    taskCreatePsram(taskEntry, "gaga_serial", 8192, this, 1, nullptr, tskNO_AFFINITY);
+    // 栈必须在内部 RAM：handleLine 的 settings.save() 会写 NVS（flash），
+    // flash 写入瞬间要冻结缓存——若本任务栈在 PSRAM 会直接断言重启
+    // （esp_cache_utils.c:96 s_task_stack_is_sane_when_cache_frozen，
+    // 2026-09-27 'w' 命令实锤）。栈 8KB→4KB（纯调试命令，足够）。
+    xTaskCreate(taskEntry, "gaga_serial", 4096, this, 1, nullptr);
 }
 
 void SerialCmd::taskEntry(void* arg) {
     static_cast<SerialCmd*>(arg)->run();
 }
 
-// 串口命令泵：阻塞读 USB 控制台 stdin，一键一事（键位表见头注释）
+// 串口命令泵：阻塞读 USB 控制台 stdin，一键一事（键位表见头注释）；
+// 'w' 进 WiFi 配置行模式后，字符累积到回车提交（handleLine），ESC 取消
 void SerialCmd::run() {
     for (;;) {
         uint8_t c = 0;
@@ -54,8 +63,81 @@ void SerialCmd::run() {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
+        if (lineMode_ != 0) {
+            if (c == 27) {                 // ESC 取消行模式
+                lineMode_ = 0;
+                printf("\n[dbg] 已取消\n");
+                continue;
+            }
+            if (c == '\n' || c == '\r') {
+                if (lineLen_ > 0) {
+                    lineBuf_[lineLen_] = '\0';
+                    handleLine(lineBuf_);
+                }
+                lineMode_ = 0;
+                lineLen_ = 0;
+                continue;
+            }
+            if (c >= 0x20 && lineLen_ < static_cast<int>(sizeof(lineBuf_)) - 1) {
+                lineBuf_[lineLen_++] = static_cast<char>(c);
+            }
+            continue;
+        }
         handleKey(c);
     }
+}
+
+// 'w'/'H' 提交：'w' = WiFi+broker 全量（ssid/pass 必填）；'H' = 仅 broker
+//（host/port/mqtt_user/mqtt_pass，不碰 WiFi 凭证——2026-09-28 加：换 broker
+// 不该要求重输 WiFi 密码）→ NVS
+void SerialCmd::handleLine(const char* line) {
+    cJSON* root = cJSON_Parse(line);
+    if (root == nullptr) {
+        printf("[dbg] JSON 解析失败：%s\n", line);
+        return;
+    }
+    const cJSON* host = cJSON_GetObjectItem(root, "host");
+    const cJSON* port = cJSON_GetObjectItem(root, "port");
+    const cJSON* muser = cJSON_GetObjectItem(root, "mqtt_user");
+    const cJSON* mpass = cJSON_GetObjectItem(root, "mqtt_pass");
+    if (lineMode_ == 2) {  // 'H'：仅 broker
+        if (cJSON_IsString(host) && host->valuestring[0] != '\0') {
+            ctx_->settings->setMqtt(host->valuestring,
+                                    cJSON_IsNumber(port) ? port->valueint : 1883);
+        }
+        if (cJSON_IsString(muser)) {
+            ctx_->settings->setMqttAuth(muser->valuestring,
+                                        cJSON_IsString(mpass) ? mpass->valuestring : "");
+        }
+        ctx_->settings->save();
+        printf("[dbg] broker 已存：%s:%d user=%s（'N' 切链路生效）\n",
+               ctx_->settings->mqttHost(), ctx_->settings->mqttPort(),
+               ctx_->settings->mqttUser()[0] != '\0' ? ctx_->settings->mqttUser() : "-");
+        cJSON_Delete(root);
+        return;
+    }
+    const cJSON* ssid = cJSON_GetObjectItem(root, "ssid");
+    const cJSON* pass = cJSON_GetObjectItem(root, "pass");
+    if (cJSON_IsString(ssid) && ssid->valuestring[0] != '\0') {
+        ctx_->settings->setWifi(cJSON_IsString(ssid) ? ssid->valuestring : "",
+                                cJSON_IsString(pass) ? pass->valuestring : "");
+        if (cJSON_IsString(host) && host->valuestring[0] != '\0') {
+            ctx_->settings->setMqtt(host->valuestring,
+                                    cJSON_IsNumber(port) ? port->valueint : 1883);
+        }
+        if (cJSON_IsString(muser)) {
+            ctx_->settings->setMqttAuth(muser->valuestring,
+                                        cJSON_IsString(mpass) ? mpass->valuestring : "");
+        }
+        ctx_->settings->save();
+        printf("[dbg] WiFi 已存：ssid=%s host=%s:%d user=%s（'N' 切强制WiFi 生效）\n",
+               ctx_->settings->wifiSsid(), ctx_->settings->mqttHost(),
+               ctx_->settings->mqttPort(),
+               ctx_->settings->mqttUser()[0] != '\0' ? ctx_->settings->mqttUser() : "-");
+    } else {
+        printf("[dbg] 无效：需要非空 ssid\n");
+    }
+    cJSON_Delete(root);
 }
 
 void SerialCmd::handleKey(uint8_t c) {
@@ -64,6 +146,34 @@ void SerialCmd::handleKey(uint8_t c) {
     // ---------------- 【用户调试】 ----------------
     case 'r':  // 模拟开/关录音（与右下按下沿、摇动同权）：空闲=开录，录音中=收尾判定
         k.rec->toggle();
+        break;
+    case 'N': {  // 链路模式循环 Auto → 强制BLE → 强制WiFi（家模式互斥切换的手动入口）
+        if (k.net == nullptr) break;
+        auto m = k.net->mode();
+        m = (m == LinkManager::Mode::Auto)      ? LinkManager::Mode::ForceBle
+          : (m == LinkManager::Mode::ForceBle)  ? LinkManager::Mode::ForceWifi
+          :                                       LinkManager::Mode::Auto;
+        k.net->setMode(m);
+        ESP_LOGI(TAG, "[dbg] 链路模式 → %s（当前活动=%s，连接=%d）",
+                 k.net->modeName(), k.net->activeName(), k.net->isConnected() ? 1 : 0);
+        break;
+    }
+    case 'w':  // WiFi 凭证+broker 行配置：下一段输入是 JSON 行（ssid/pass/host/port）
+        lineMode_ = 1;
+        lineLen_  = 0;
+        printf("\n[dbg] 输入 WiFi 配置 JSON，回车提交（例："
+               "{\"ssid\":\"Home\",\"pass\":\"pwd\",\"host\":\"192.168.1.10\",\"port\":1883}）：\n");
+        break;
+    case 'H':  // 仅 broker 行配置（不动 WiFi 凭证）：下一段输入 {"host","port","mqtt_user","mqtt_pass"}
+        lineMode_ = 2;
+        lineLen_  = 0;
+        printf("\n[dbg] 输入 broker 配置 JSON，回车提交（例："
+               "{\"host\":\"192.168.1.10\",\"port\":1883,\"mqtt_user\":\"u\",\"mqtt_pass\":\"p\"}）：\n");
+        break;
+    case 'G':  // 全局日志 → DEBUG（排障：看 WiFi init 内部哪步失败；再按恢复 INFO）
+        s_logVerbose = !s_logVerbose;
+        esp_log_level_set("*", s_logVerbose ? ESP_LOG_DEBUG : ESP_LOG_INFO);
+        ESP_LOGI(TAG, "[dbg] 全局日志 → %s", s_logVerbose ? "DEBUG" : "INFO");
         break;
     case 't':  // 模拟右上长按：talk 开始 / 结束切换
         if (k.talk->isOff()) k.talk->start(); else k.talk->stop(true, "serial_end");

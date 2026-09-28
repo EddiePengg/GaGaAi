@@ -47,17 +47,29 @@ public:
 
     void feed(const uint8_t* data, size_t len);  // 喂任意一段字节流，推进状态机
     void reset();                                // 清空重组状态（断连/残帧自保时调用）
-    bool partial() const { return mode_ != Mode::Scan; }  // 正在半个帧里（卡帧看门狗用）
+    bool partial() const { return mode_ != Mode::Scan && mode_ != Mode::Hunt; }
 
 private:
     void finishFrame();                          // 整帧齐了：回调上层并回扫描态
+    void acceptHeader();                         // hdr_ 凑满 3 字节：校验并分发
+    void enterHunt(const char* reason);          // 流已脏：滑窗找下一个合法帧头
 
     enum class Mode : uint8_t {
         Scan,           // 凑 3 字节包头
         SinglePayload,  // 单包帧 payload（可跨 feed 边界）
         SubHeader,      // 分片帧：凑 3 字节子包头
         SubPayload,     // 分片帧：收本子包 payload
+        Hunt,           // 流错位自救：逐字节滑窗找合法帧头（2026-09-28）
     };
+
+    // 合法 payload 上限：talk/notify 下行音频帧 ≤2KB/帧、reply JSON 数 KB，
+    // 8KB 留 4 倍余量。超过即判定流错位（流内脏字节被误读成帧头时其 len
+    // 字段是随机值，几乎必然超 cap——真机实锤：丢一个 512B 包后 ogg 数据
+    // 被误读成 0xfdXX 的"单包帧"，吞掉后续全部真实帧直到残帧超时）
+    static constexpr uint32_t kMaxPayload = 8192;
+    // 分片帧首包自带 payload 的约定值：发送端按 512B/物理包切块（protocol.md §2），
+    // 首包 payload 恒为 509B（512-3 帧头）；分片 ⇒ 总长 >509 ⇒ 首包必满
+    static constexpr uint32_t kFirstPayload = 509;
 
     FrameCallback frameCb_;
     ErrorCallback errorCb_;

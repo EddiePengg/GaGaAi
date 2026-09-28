@@ -86,13 +86,11 @@ lv_display_t* displayStart() {
             .rotation              = ESP_LV_ADAPTER_ROTATE_0,
             .hor_res               = BSP_LCD_H_RES,
             .ver_res               = BSP_LCD_V_RES,
-            .buffer_height         = 10,   // 行高 50→10→4（2026-09-25 清晨）：0.5.0 的控件树
-                                            // 把内部 RAM 吃到 ~7KB，10 行块 = 466×10×2≈9.3KB
-                                            // 的 DMA 反弹缓冲永远分配不出来 → 每次刷屏
-                                            // "Draw bitmap failed: ESP_ERR_NO_MEM"（一晚
-                                            // 日志 736 条实锤），物理屏只剩旧像素+零星小块
-                                            // = 用户看到的"蒙雾/残影/花盆"。4 行块 3.7KB
-                                            // 塞得进去；事务数变多但每笔都成功
+            .buffer_height         = 3,    // 行高 50→10→4→10→4→2→3（2026-09-28）：2 行（1.86KB）
+                                            // 分配零失败但用户实锤"没法看"（事务太少粒度粗）；
+                                            // 3 行 = 2.79KB 需求，观感回到正常档，WiFi 稳态
+                                            // 6.6KB 最大连续块仍有两倍余量。4 行（3.7KB）观感
+                                            // 最佳但碎片紧张——LVGL 懒加载后再评估调回。
             .use_psram             = true,
             .enable_ppa_accel      = false,
             .require_double_buffer = true,

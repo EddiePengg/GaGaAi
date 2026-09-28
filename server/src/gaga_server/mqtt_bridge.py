@@ -33,6 +33,9 @@ class MqttBridge:
 
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                                   client_id=cfg.mqtt_client_id)
+        # 下行串行闸门（RLock）：publish_json/publish_audio 每次发布持锁；
+        # NotifyPusher 音频分片流期间全程持锁——分片帧内不允许插入任何单包帧
+        self.downlink = threading.RLock()
         if cfg.mqtt_username:
             self.client.username_pw_set(cfg.mqtt_username, cfg.mqtt_password)
         self.client.on_connect = self._on_connect
@@ -126,11 +129,13 @@ class MqttBridge:
         if "ts" not in msg:
             msg = {**msg, "ts": int(time.time())}
         payload = json.dumps(msg, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        for pkt in encode_frame(FRAME_TYPE_JSON, payload):
-            self.client.publish(self.cfg.topic_down, pkt, qos=1)
+        with self.downlink:
+            for pkt in encode_frame(FRAME_TYPE_JSON, payload):
+                self.client.publish(self.cfg.topic_down, pkt, qos=1)
         log.info("下行 %s → %s", msg, self.cfg.topic_down)
 
     def publish_audio(self, data: bytes) -> None:
         """下行音频（talk 会话的模型回复，ogg_opus 24kHz 分片）→ type=0x01 帧。"""
-        for pkt in encode_frame(FRAME_TYPE_OPUS, data):
-            self.client.publish(self.cfg.topic_down, pkt, qos=1)
+        with self.downlink:
+            for pkt in encode_frame(FRAME_TYPE_OPUS, data):
+                self.client.publish(self.cfg.topic_down, pkt, qos=1)

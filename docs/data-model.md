@@ -16,7 +16,8 @@
 
 | 信令 | 字段 | 说明 |
 |---|---|---|
-| `hello` | `device: string`, `fw: string` | 连接建立后第一帧，上报设备 ID 与固件版本 |
+| `hello` | `device: string`, `fw: string`, `name?: string` | 连接建立后第一帧，上报设备 ID 与固件版本；name=显示名（ADR-064，群里署名用，可缺省） |
+| `set_name` | `name: string` | App→设备本地信令：设置显示名存 NVS（ADR-064）。空 name=清除 |
 | `rec_start` | — | 开始录音（UI 已进录音态） |
 | `rec_stop` | `duration_ms: int` | 结束录音。音频帧流可在 rec_stop 前**或**后到达（固件当前是录完随 rec_stop 上行）；服务端以 rec_stop 后的静默窗口（默认 2s）收齐帧再触发 ASR，两种顺序都兼容 |
 | `link` | `mqtt: bool` | **App→设备本地信令（BLE 直发，不经服务器；ADR-038）**：手机侧 MQTT 链路状态。BLE 每次就绪先推一次，连/断变化即推；设备按键预检用（false 时提示"手机没连上服务器"并拦下录音/talk） |
@@ -35,6 +36,8 @@
 | `talk_asr` | `text: string`, `final: bool` | 实时对话中用户语音的 ASR 文本（上屏）。流式 interim 可能有交叠（双跑次特性），`final=true` 为干净终稿 |
 | `talk_reply` | `text: string`, `final: bool` | 模型回复文本（上屏）。流式节流 ~300ms，`final=true` 为整句 |
 | `talk_end` | `reason: string` | 实时会话已结束。reason：`exit_intent`（退出意图）/ `device_end`（设备主动）/ `timeout` / `timeout_max` / `error` |
+| `notify` | `device: string`, `text: string`, `id: string` | **服务器主动通知开始（ADR-066）**：text=已拍平通知文本（消息卡"GAGA 提醒"栏），id=通知唯一号 `n_<毫秒时间戳>`；随后 type=0x01 帧为 TTS 音频（ogg_opus 24kHz）。带 device 戳：非本机忽略；talk/录音中到达只上屏不播语音 |
+| `notify_end` | `device: string`, `id: string` | 通知 TTS 音频流结束：设备排空播完收尾 |
 | `error` | `code: string`, `msg: string` | 错误码 + 人类可读信息 |
 
 错误码约定：`ASR_FAIL`（识别失败/空文本/音频解码失败）、`CHANNEL_FAIL`（接入端投递失败，ADR-030；旧名 `WEBHOOK_FAIL` 随 webhook 一起退役）、`NOT_IMPLEMENTED`（功能未启用，如未配置 VOLCENGINE_API_KEY 时的 talk_request）、`BUSY`（实时对话进行中又收到 talk_request/rec_start）、`REALTIME_FAIL`（火山实时会话建立失败或中途出错）、`AUTH_FAIL`、`RATE_LIMIT`。
@@ -56,6 +59,7 @@
 | 帧长 | 20ms/帧 | 320 采样/帧 |
 | 传输 | type=0x01 二进制帧 | 一帧 Opus 一个传输帧，不打包 |
 | talk 下行音频 | ogg_opus 24kHz 分片 | M5 实时对话的模型回复：同为 type=0x01 帧，但内容是火山下行的 Ogg 分片（拼接即完整 Ogg 流），与上行裸包不同（ADR-021） |
+| notify 下行音频 | ogg_opus 24kHz 分片 | 服务器主动通知的 TTS 语音（ADR-066）：与 talk 下行同格式（拼接即完整 Ogg 流），notify / notify_end 两个 JSON 信令界定边界；服务器 2KB/帧、60ms/帧 pacing 发送 |
 
 ## 3. 服务端实体（持久化）
 

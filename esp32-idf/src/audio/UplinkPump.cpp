@@ -6,8 +6,10 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 
 #include "AppContext.h"
+#include "state/Settings.h"
 #include "audio/AudioPipe.h"
 #include "audio/OpusCodec.h"
 #include "ble/GattServer.h"
@@ -31,6 +33,8 @@ void UplinkPump::begin(AppContext* ctx) {
 }
 
 void UplinkPump::taskEntry(void* arg) {
+    // 卡死自保：见 main.cpp appTask 的 TWDT 注释（音频泵 wedge → 5s 整机自复位）
+    esp_task_wdt_add(nullptr);
     static_cast<UplinkPump*>(arg)->run();
 }
 
@@ -39,6 +43,12 @@ void UplinkPump::beginSession() {
     framesDrop_ = 0;
     recRmsSum_  = 0;
     committed_  = false;
+    silenceRunMs_   = 0;   // 静音自动收尾统计（2026-09-28）
+    voicedMs_       = 0;
+    recFrames_      = 0;
+    autoStopReq_    = false;
+    autoDiscard_    = false;
+    sessionStartMs_ = millis();
     bufCount_   = 0;
     sessionLive_ = true;
     linkSawDown_ = false;      // 离线粘性标记：每段录音重新起判
@@ -96,6 +106,7 @@ bool UplinkPump::micReadCycle(int16_t* monoOut, int framesPerCh) {
 // isTalk=true 直发；录音帧看确认窗：commit 前入缓冲，commit 后连缓冲一起冲出
 void UplinkPump::flushOneFrame(const int16_t* mono320, bool isTalk) {
     const uint32_t rms = AudioPipe::rms(mono320, OpusEnc::FRAME_SAMPLES);
+    if (!isTalk && ctx_->app->recState() == RecState::Recording) watchVoice(rms);
     uint8_t pkt[256];
     const int n = ctx_->enc->encode(mono320, pkt, sizeof(pkt));
     if (n <= 0) {
@@ -160,6 +171,7 @@ void UplinkPump::run() {
     static int16_t mono480[480];  // 下混后单声道（24k 一帧 480 采样为上限）
     static int16_t mono320[OpusEnc::FRAME_SAMPLES];
     for (;;) {
+        esp_task_wdt_reset();   // TWDT 订阅者自喂（漏喂=每 5s 误报，见 main.cpp）
         watchRecState();
         const uint32_t now = millis();
         // 对账查询（2026-09-26；2026-09-27 扩到 Waiting + ADR-059 上限退避）：
@@ -308,6 +320,28 @@ void UplinkPump::capMarkSegment() {
 // rec 状态迁移的账本：Sending→Idle（8s 无回执）时判断是否真丢了数据——
 // 全帧送达只是 ASR 慢（正常，receipt 迟早来，清缓存防重复补发）；
 // 丢过帧或 MQTT 断了才是真失败（标记待补发）。→Sent = 送达（同样清）。
+void UplinkPump::watchVoice(uint32_t rms) {
+    if (autoStopReq_) return;   // 请求已置位，等 Recorder 执行收尾
+    recFrames_++;
+    if (rms >= SILENCE_RMS_THR) {
+        voicedMs_ += 20;        // 20ms/帧
+        silenceRunMs_ = 0;
+    } else {
+        silenceRunMs_ += 20;
+    }
+    const uint32_t durMs = millis() - sessionStartMs_;
+    if (silenceRunMs_ >= SILENCE_STOP_MS || durMs >= MAX_REC_MS) {
+        autoDiscard_ = voicedMs_ < MIN_VOICE_MS;   // 整段几乎无语音 → 静默撤销
+        autoStopReq_ = true;
+        ESP_LOGI(TAG, "[sil] 自动收尾：连续静音=%lums 段长=%lums 有效语音=%lums 均RMS=%lu → %s",
+                 static_cast<unsigned long>(silenceRunMs_),
+                 static_cast<unsigned long>(durMs),
+                 static_cast<unsigned long>(voicedMs_),
+                 recFrames_ ? static_cast<unsigned long>(recRmsSum_ / recFrames_) : 0,
+                 autoDiscard_ ? "静默丢弃" : "正常发送");
+    }
+}
+
 void UplinkPump::watchRecState() {
     const int nowRec = static_cast<int>(ctx_->app->recState());
     // 粘性标记（2026-09-26 离线录音）：本段录音期间手机侧 MQTT 断过一次即置位。
@@ -370,6 +404,11 @@ void UplinkPump::capReplay() {
     uint32_t segFrames = 0, totalSent = 0, segs = 0;
     uint32_t off = capDoneOff_;
     while (off + 2 <= capLen_) {
+        // 喂狗（2026-09-28 误杀事故修复）：本循环 18ms/帧埋头重放，长的段
+        // （>277 帧 ≈5.5s 语音）会超过 TWDT 5s 时限——任务实际没卡死，只是
+        // 回不到 run() 顶部的 esp_task_wdt_reset()，被看门狗误判卡死而复位
+        // （真机实锤：12s 录音补发 609 帧 ≈11s → 必死，重启循环闭环）。
+        esp_task_wdt_reset();
         // 用户开始新录音：补发让路（缓存未清，录音结束退避后继续）
         if (ctx_->app->recState() == RecState::Recording) {
             capPending_ = true;

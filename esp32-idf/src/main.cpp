@@ -20,6 +20,8 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"   // esp_reset_reason（freeze 取证：上次死因自报）
+#include "esp_task_wdt.h"
 #include "nvs_flash.h"
 #include "cJSON.h"
 
@@ -33,7 +35,7 @@
 #include "input/Rtc.h"
 #include "protocol/frame.h"
 #include "ble/GattServer.h"
-// #include "net/WifiTransport.h"  // WiFi 直连暂缓（内存不足，恢复=取消注释+CMakeLists 加回）
+#include "net/LinkManager.h"      // 链路总机：BLE/WiFi 互斥 + 自动故障转移（2026-09-27）
 #include "state/AppState.h"
 #include "state/MsgLog.h"
 #include "state/Settings.h"
@@ -44,6 +46,7 @@
 #include "audio/UplinkPump.h"
 #include "rec/Recorder.h"
 #include "talk/TalkSession.h"
+#include "notify/NotifySession.h"
 #include "motion/Qmi8658.h"
 #include "motion/Wake.h"
 #include "power/Power.h"
@@ -60,14 +63,14 @@ static MsgLog      msgLog;
 static Settings    settings;
 static Ui          ui;
 static AudioPipe   audio;
-static GattServer  gatt;      // 外出模式的链路
+static LinkManager linkMgr;   // 链路总机：对外唯一入口，内部 BLE/WiFi 二选一（互斥）
 static TalkSession talk;
+static NotifySession notify;
 static OpusEnc     opusEnc;
 static Recorder    recorder;
 static UplinkPump  pump;
 static Qmi8658     imu;
 static Wake        wake;
-// static WifiTransport wifiLink;  // 家模式链路（暂缓启用）
 static Power       power;
 static KeywordWake kws;
 static SerialCmd   serial;
@@ -109,6 +112,7 @@ static void onBleFrame(uint8_t type, const uint8_t* payload, uint16_t len) {
 
 // JSON 信令路由（protocol.md §3 / data-model.md §1）——下行信令各干各的：
 //   talk_*    → TalkSession 自解析（talk_ready 建会话 / talk_asr、talk_reply 上屏 / talk_end 收尾）
+//   notify    → NotifySession 自解析（服务器主动 TTS 通知：上屏 + 播报，0x01 帧非 talk 态归它）
 //   receipt   → 语音已送达飞书：ASR 终稿填"你："栏，sending → sent
 //   reply     → 答案文本填"GAGA："栏 + "叮咚"，息屏时亮屏直达详情页
 //   error     → 服务端报错：卡片标"发送失败：msg"
@@ -122,7 +126,7 @@ static void handleJsonSignal(const char* json) {
     if (cJSON_IsNumber(ts) && ts->valuedouble > 1600000000.0) {
         rtcSetUnix(static_cast<int64_t>(ts->valuedouble));
     }
-    // 设备过滤（2026-09-27 多设备串扰修复）：receipt/reply/error 服务端盖
+    // 设备过滤（2026-09-27 多设备串扰修复）：receipt/reply/error/notify* 服务端盖
     // device 戳（消息归属设备）；带戳且不是本机的直接忽略——手表和胸前
     // 嘎嘎同群同 broker，不过滤的话手表的 ASR 文本会经 FIFO 灌进本机卡片
     //（真机实锤）。不带戳 = 旧服务端/广播信令，维持兼容不过滤。
@@ -131,7 +135,8 @@ static void handleJsonSignal(const char* json) {
     const char* t = cJSON_IsString(type) ? type->valuestring : "";
     const bool needsDevice = strncmp(t, "receipt", 7) == 0 ||
                               strncmp(t, "reply", 5) == 0 ||
-                              strncmp(t, "error", 5) == 0;
+                              strncmp(t, "error", 5) == 0 ||
+                              strncmp(t, "notify", 6) == 0;  // notify / notify_end
     if (needsDevice && cJSON_IsString(dv) && dv->valuestring[0] != '\0' &&
         strcmp(dv->valuestring, DEVICE_ID) != 0) {
         ESP_LOGI(TAG, "[ble] 信令属设备 %s（非本机 %s），忽略",
@@ -141,6 +146,8 @@ static void handleJsonSignal(const char* json) {
     }
     if (strncmp(t, "talk_", 5) == 0) {
         talk.onSignalJson(json);  // talk_* 全转交（内部自解析状态和字幕）
+    } else if (strcmp(t, "notify") == 0 || strcmp(t, "notify_end") == 0) {
+        notify.onSignalJson(json);  // notify 开始/结束（内部自解析，含音频帧接管）
     } else if (strcmp(t, "receipt") == 0) {
         const cJSON* text = cJSON_GetObjectItem(root, "text");
         const cJSON* mid = cJSON_GetObjectItem(root, "msg_id");
@@ -196,16 +203,31 @@ static void handleJsonSignal(const char* json) {
         ui.showNote(m);
         appState.notifyError();     // sending → idle
     } else if (strcmp(t, "wifi_cfg") == 0) {
-        // 家模式 WiFi 凭证下发（ADR-039）：App 经 BLE 推来，存 NVS。
-        // B 期（WiFi 直连 MQTT）读取；本期能力边界=仅存储+回显
+        // 家模式 WiFi 凭证+broker 下发（ADR-039 + 2026-09-27 家模式落地）：
+        // App 经 BLE 推来，存 NVS。ssid/pass 必填，host/port 可选（沿用旧值）
         const cJSON* ssid = cJSON_GetObjectItem(root, "ssid");
         const cJSON* pass = cJSON_GetObjectItem(root, "pass");
+        const cJSON* host = cJSON_GetObjectItem(root, "host");
+        const cJSON* port = cJSON_GetObjectItem(root, "port");
+        const cJSON* muser = cJSON_GetObjectItem(root, "mqtt_user");
+        const cJSON* mpass = cJSON_GetObjectItem(root, "mqtt_pass");
         if (cJSON_IsString(ssid) && ssid->valuestring[0] != '\0') {
             settings.setWifi(cJSON_IsString(ssid) ? ssid->valuestring : "",
                              cJSON_IsString(pass) ? pass->valuestring : "");
+            if (cJSON_IsString(host) && host->valuestring[0] != '\0') {
+                settings.setMqtt(host->valuestring,
+                                 cJSON_IsNumber(port) ? port->valueint : 1883);
+            }
+            if (cJSON_IsString(muser)) {
+                settings.setMqttAuth(muser->valuestring,
+                                     cJSON_IsString(mpass) ? mpass->valuestring : "");
+            }
             settings.save();
             ui.showNote("WiFi 已配置 ✓");
-            ESP_LOGI(TAG, "[wifi] 凭证已存（%s），B 期启用直连", settings.wifiSsid());
+            ESP_LOGI(TAG, "[wifi] 凭证已存（%s → %s:%d，鉴权=%s）",
+                     settings.wifiSsid(), settings.mqttHost(),
+                     settings.mqttPort(),
+                     settings.mqttUser()[0] != '\0' ? settings.mqttUser() : "无");
         } else {
             ui.showNote("WiFi 配置无效");
         }
@@ -243,7 +265,8 @@ static void consumeBleEvents() {
             if (talk.isActive()) {
                 talk.onAudioFrame(ev.data, ev.len);  // talk 会话的 ogg_opus 分片
             } else {
-                ESP_LOGW(TAG, "[ble] 非 talk 态收到音频帧 %uB，丢弃", ev.len);
+                // 非 talk 态：服务器主动 TTS 通知的分片（notify 未激活时内部自丢）
+                notify.onAudioFrame(ev.data, ev.len);
             }
         } else {
             ESP_LOGW(TAG, "[ble] 未知帧 type=0x%02X len=%u", ev.type, ev.len);
@@ -287,8 +310,8 @@ static void wireButtons() {
     // 右上长按：进入/结束 realtime 对话（M5）
     btnTop.onLongPress([] {
         if (talk.isOff()) {
-            if (!gatt.isConnected()) {
-                ESP_LOGI(TAG, "[key] top long: BLE 未连接，talk 不可用");
+            if (!linkMgr.isConnected()) {
+                ESP_LOGI(TAG, "[key] top long: 链路未连接，talk 不可用");
                 ui.showNote("请打开手机App");
                 return;
             }
@@ -315,13 +338,29 @@ static void wireButtons() {
 // 主循环任务：消费 BLE 队列 + 扫按键 + 状态机/唤醒/低功耗 tick + UI 刷新。
 // 与上行泵分工：这里不碰音频采集/编码/发帧，只管"事件进、状态转、画面出"
 static void appTask(void*) {
+    // 卡死自保（2026-09-28 凌晨"卡死好几次"应对）：TWDT 默认只盯 IDLE 任务，
+    // 应用任务死循环根本喂不到狗。订阅 + 循环内手动喂（esp_task_wdt_reset 只能
+    // 自喂，谁订阅谁 reset；漏喂会每 5s 误报一次，0.6.1 实锤）。
+    // 任何关键任务 wedge 住 → 5s 整机自复位（重启按 NVS 偏好自动恢复业务）。
+    esp_task_wdt_add(nullptr);
     for (;;) {
-        consumeBleEvents();   // BLE 帧泵的出水口：JSON 路由 / talk 音频转交
+        esp_task_wdt_reset();   // 订阅者每轮喂狗（10ms 节拍，远小于 5s 窗口）
+        // 心跳（30s）： freeze 排障的生命线——心跳停=真死；心跳在=只是 USB 控制台假死
+        static uint32_t lastHbMs = 0;
+        if (millis() - lastHbMs > 30000) {
+            lastHbMs = millis();
+            ESP_LOGI(TAG, "[hb] 内部空闲=%u 低点=%u 模式=%s 活动=%s",
+                     static_cast<unsigned>(esp_get_free_internal_heap_size()),
+                     static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)),
+                     linkMgr.modeName(), linkMgr.activeName());
+        }
+        consumeBleEvents();   // 帧泵出水口：JSON 路由 / talk 音频转交
         btnTop.loop();
         btnBottom.loop();
         recorder.tick();      // 确认窗 commit
+        notify.tick();        // 通知播放：泵自退后的断电收尾 + 超时兜底
         appState.tick();      // 息屏超时 / talk 连接超时等定时状态机
-        gatt.tick();          // 广播看门狗：未连接却不在广播 → 强制重启（今晚实锤的隐身 bug）
+        linkMgr.tick();       // 链路总机：BLE 广播看门狗 + WiFi/BLE 故障转移状态机
         // 摇动 = 开始/结束录音（ADR-040 湿手操作；与右下单击同权，ADR-045）。
         // 录音中摇动 = 停（2026-09-25 用户实测：原条件忽略录音中摇动，
         // "要停的时候摇七八下都没用"——对称开合才是直觉）
@@ -329,8 +368,30 @@ static void appTask(void*) {
         if (wakeEvt == Wake::Event::Tap && !appState.isTalking()) {
             recorder.toggle();
         }
-        power.tick(gatt.isConnected());  // 挂机深睡判定
+        power.tick(linkMgr.isConnected());  // 挂机深睡判定（链路总机口径）
         ui.tick();
+        // 链路状态推送（~2s 节流，变化才推）：设置页"当前链路"行 + 状态栏模式/内存
+        static uint32_t lastLinkPushMs = 0;
+        static char lastLinkText[24] = "";
+        if (millis() - lastLinkPushMs > 2000) {
+            lastLinkPushMs = millis();
+            const char* active = linkMgr.activeName();
+            const bool conn = linkMgr.isConnected();
+            char text[24];
+            if (strcmp(active, "BLE") == 0)
+                snprintf(text, sizeof(text), "外出·BLE %s", conn ? "已连" : "等待");
+            else if (strcmp(active, "WiFi") == 0)
+                snprintf(text, sizeof(text), "在家·WiFi %s", conn ? "已连" : "连接中");
+            else
+                snprintf(text, sizeof(text), "切换中…");
+            if (strcmp(text, lastLinkText) != 0) {
+                strncpy(lastLinkText, text, sizeof(lastLinkText) - 1);
+                lastLinkText[sizeof(lastLinkText) - 1] = '\0';
+                ui.setLinkStatus(text);
+            }
+            ui.setStatusLink(active, conn);
+            ui.setStatusMem(static_cast<int>(esp_get_free_internal_heap_size()) / 1024);
+        }
         // 主循环节拍保持 10ms 不变：摇动判据按 ~11ms 采样标定（4 样本摆），
         // 放宽会破坏阈值。省电靠 IMU Idle 档 + BLE 间隔 + 息屏，不靠任务减速
         vTaskDelay(pdMS_TO_TICKS(10));   // 10ms tick：按键防抖/摇动采样分辨率
@@ -346,6 +407,22 @@ extern "C" void app_main() {
     vTaskDelay(pdMS_TO_TICKS(1500));
 
     printf("gaga ai fw-idf %s\n", FW_VERSION);  // 版本行：验收锚点，纯文本无前缀
+
+    // 复位原因自报（freeze 取证）：每次重启打印上次死因——看门狗/棕掉/断言/
+    // 软件复位一目了然，配合 TWDT_PANIC 的肇事任务打印，freeze 不再需要猜
+    const esp_reset_reason_t rst = esp_reset_reason();
+    ESP_LOGW(TAG, "[boot] 上次复位原因=%d（%s）",
+             static_cast<int>(rst),
+             rst == ESP_RST_POWERON   ? "上电" :
+             rst == ESP_RST_BROWNOUT  ? "⚠️ 棕掉（电压跌）" :
+             rst == ESP_RST_PANIC     ? "断言/panic" :
+             rst == ESP_RST_TASK_WDT  ? "任务看门狗" :
+             rst == ESP_RST_INT_WDT   ? "中断看门狗" :
+             rst == ESP_RST_SW        ? "软件复位" :
+             rst == ESP_RST_DEEPSLEEP ? "深睡唤醒" :
+             rst == ESP_RST_SDIO      ? "SDIO" :
+             rst == ESP_RST_USB       ? "USB 复位（刷机/串口工具）" :
+             rst == ESP_RST_JTAG      ? "JTAG" : "其他");
 
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_BT);
@@ -368,17 +445,17 @@ extern "C" void app_main() {
     ctx.settings = &settings;
     ctx.ui       = &ui;
     ctx.audio    = &audio;
-    ctx.link     = nullptr;  // 装配分支后决定（BLE / WiFi）
+    ctx.link     = &linkMgr;  // 装配期即指向总机：泵任务高优先级可能先运行（2026-09-26
+                              // 启动崩溃根因），此处保证非空且永不变（切换在总机内部）
+    ctx.net      = &linkMgr;  // 串口调试命令直达（'N' 切链路模式）
     ctx.talk     = &talk;
+    ctx.notify   = &notify;
     ctx.enc      = &opusEnc;
     ctx.rec      = &recorder;
     ctx.pump     = &pump;
     ctx.wake     = &wake;
     ctx.power    = &power;
     ctx.kws      = &kws;
-    ctx.link     = &gatt;   // 默认 BLE 链路：泵任务高优先级可能先于链路选择
-                            // 运行（2026-09-26 启动崩溃根因），此处保证非空；
-                            // 家模式分支随后按需覆盖
 
     ESP_LOGI(TAG, "[heap] 起点 内部=%luB",
              (unsigned long)esp_get_free_internal_heap_size());
@@ -413,6 +490,20 @@ extern "C" void app_main() {
                 }
                 break;
             case Ui::SettingKey::TalkProvider:   break;  // provider 选择由 server 桥消费（信令下发），固件无动作
+            case Ui::SettingKey::LinkMode: {
+                // 工作模式三档 → LinkManager（setMode 内部经 onModePersist 落盘 NVS）
+                auto m = LinkManager::Mode::Auto;
+                if (value == 1) m = LinkManager::Mode::ForceBle;
+                if (value == 2) m = LinkManager::Mode::ForceWifi;
+                if (value == 2 && !settings.wifiConfigured()) {
+                    ui.showNote("先配 WiFi（App 或串口w）");
+                    settings.setLinkMode(0);   // 回退 Auto，不改 LinkManager
+                    settings.save();
+                    return;                    // applyCb 内 return：slider 场景不适用本键
+                }
+                linkMgr.setMode(m);
+                break;
+            }
             }
         });
         ui.begin(&appState, &msgLog);
@@ -435,9 +526,8 @@ extern "C" void app_main() {
     recorder.begin(&ctx);
     pump.begin(&ctx);
 
-    // ---- 链路选择（ADR-039 家/外出模式，二选一互斥）----
+    // ---- 链路接线（ADR-039 互斥 + 2026-09-27 自动故障转移，全在 LinkManager 内部）----
     Link* activeLink = nullptr;
-    const bool homeMode = settings.wifiEnabled() && settings.wifiConfigured();
     auto wireLinkEvents = [&](Link& link) {
         link.onFrame(onBleFrame);  // 帧泵进水口：host 任务只入队
         link.onConnection([&](bool up) {
@@ -460,14 +550,14 @@ extern "C" void app_main() {
             }
         });
     };
-    if (false) {
-        // 家模式：暂不可用（WiFi 栈已从构建移除——内存不足，ADR-039 备注）
-    } else {
-        gatt.begin();
-        wireLinkEvents(gatt);
-        ctx.link = &gatt;
-        ESP_LOGI(TAG, "[net] 外出模式：BLE 转发（name=%s）", gatt.deviceName());
-    }
+    (void)activeLink;
+    wireLinkEvents(linkMgr);
+    // 模式变更落盘：设置页/串口 'N' 都经 LinkManager::setMode → 这里写 NVS → 重启恢复
+    linkMgr.onModePersist([](int m) {
+        settings.setLinkMode(m);
+        settings.save();
+    });
+    linkMgr.begin(settings);  // 开机按 NVS 偏好进 Auto/强制BLE/强制WiFi
 
     // talk 会话（回调 → UI 提示）——绑定当前链路
     talk.begin(ctx.link, &appState, &audio);
@@ -484,6 +574,9 @@ extern "C" void app_main() {
         snprintf(buf, sizeof(buf), "对话错误 %s", code);
         ui.showNote(buf);
     });
+
+    // 服务器主动 TTS 通知：依赖与 TalkSession 同批注入（互斥检查要看 talk/rec）
+    notify.begin(&appState, &audio, &msgLog, &ui, &talk);
 
 
     // 时钟 / 按键
@@ -508,9 +601,6 @@ extern "C" void app_main() {
     // 省掉"正在回复…"动效每 500ms 对睡面板的全量重绘），亮屏瞬间对齐
     appState.onScreenChange([](ScreenState s) { if (s == ScreenState::On) ui.fullRefresh(); });
     kws.begin(&ctx);
-    // ⚠️ 暂不开机自动恢复 KWS：esp_srmodel_init 的 mmap 路径真机仍崩
-    // （boot loop 引信，ADR-037 备注），稳定前仅手动开（'W'/设置页）。
-    // 崩溃修复后恢复这行：if (settings.kwsEnabled()) kws.setEnabled(true);
 
     // 任务群（栈全在 PSRAM：内部 RAM 紧张）
     // 上行泵在 pump.begin 已拉起（core1 最高优先级：音频不能断流）
@@ -525,4 +615,10 @@ extern "C" void app_main() {
     audio.requestOpen(AudioPipe::RATE_REC);
     audio.event(AudioPipe::SndEv::Listen);  // 开机一声——鸭子打招呼
     audio.requestClose();
+
+    // 开机自动恢复 KWS（2026-09-28）：设置开着 → 引擎自启。
+    // ⚠️ 必须排在自检之后：自检的 requestClose 曾把 KWS 刚打开的麦掐死
+    // （micRead 永久 -1，"5 分钟前还灵、之后装死"的事故实锤）。作业 FIFO
+    // 顺序：自检开→自检关→KWS 开，最终麦归 KWS。
+    if (settings.kwsEnabled()) kws.setEnabled(true);
 }

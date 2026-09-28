@@ -25,8 +25,13 @@ static constexpr const char* kKeyARot    = "arot";
 static constexpr const char* kKeyFlip    = "scrflip";
 static constexpr const char* kKeySsid    = "wifi_ssid";
 static constexpr const char* kKeyPass    = "wifi_pass";
+static constexpr const char* kKeyMqttHost = "mqtt_host";
+static constexpr const char* kKeyMqttPort = "mqtt_port";
+static constexpr const char* kKeyMqttUser = "mqtt_user";
+static constexpr const char* kKeyMqttPass = "mqtt_pass";
 static constexpr const char* kKeyDname   = "dname";
 static constexpr const char* kKeyWifiOn  = "wifi_on";
+static constexpr const char* kKeyLinkMode = "link_mode";
 static constexpr const char* kKeyTalkPrv = "talk_prv";
 
 void Settings::load() {
@@ -54,6 +59,28 @@ void Settings::load() {
         if (nvs_get_str(h, kKeyDname, buf, &len) == ESP_OK)
             utf8CopyTrunc(devName_, sizeof(devName_), buf);
     }
+    {   // 家模式 WiFi 凭证 + broker + MQTT 鉴权（2026-09-27 家模式落地：
+        // 修复"只声明不读写"——此前 wifi_cfg 存的凭证重启即丢）
+        char buf[64];
+        size_t len = sizeof(buf);
+        if (nvs_get_str(h, kKeySsid, buf, &len) == ESP_OK)
+            utf8CopyTrunc(wifiSsid_, sizeof(wifiSsid_), buf);
+        len = sizeof(buf);
+        if (nvs_get_str(h, kKeyPass, buf, &len) == ESP_OK)
+            utf8CopyTrunc(wifiPass_, sizeof(wifiPass_), buf);
+        len = sizeof(buf);
+        if (nvs_get_str(h, kKeyMqttHost, buf, &len) == ESP_OK)
+            utf8CopyTrunc(mqttHost_, sizeof(mqttHost_), buf);
+        len = sizeof(buf);
+        if (nvs_get_str(h, kKeyMqttUser, buf, &len) == ESP_OK)
+            utf8CopyTrunc(mqttUser_, sizeof(mqttUser_), buf);
+        len = sizeof(buf);
+        if (nvs_get_str(h, kKeyMqttPass, buf, &len) == ESP_OK)
+            utf8CopyTrunc(mqttPass_, sizeof(mqttPass_), buf);
+        if (nvs_get_i32(h, kKeyMqttPort, &v) == ESP_OK) mqttPort_ = static_cast<int>(v);
+        if (nvs_get_i8(h, kKeyWifiOn, &b) == ESP_OK) wifiEnabled_ = (b != 0);
+        if (nvs_get_i32(h, kKeyLinkMode, &v) == ESP_OK) setLinkMode(static_cast<int>(v));
+    }
     nvs_close(h);
     ESP_LOGI(TAG, "设置已载入：音量 %d 亮度 %d 息屏 %lums 提示音 %s 语音唤醒 %s 字幕 %s 对话引擎 %s",
              volume_, brightness_, static_cast<unsigned long>(screenTimeoutMs_),
@@ -80,6 +107,13 @@ void Settings::save() {
     nvs_set_i8(h, kKeyWifiOn, wifiEnabled_ ? 1 : 0);
     nvs_set_i32(h, kKeyTalkPrv, talkProviderIdx_);
     nvs_set_str(h, kKeyDname, devName_);
+    nvs_set_str(h, kKeySsid, wifiSsid_);
+    nvs_set_str(h, kKeyPass, wifiPass_);
+    nvs_set_str(h, kKeyMqttHost, mqttHost_);
+    nvs_set_str(h, kKeyMqttUser, mqttUser_);
+    nvs_set_str(h, kKeyMqttPass, mqttPass_);
+    nvs_set_i32(h, kKeyMqttPort, mqttPort_);
+    nvs_set_i32(h, kKeyLinkMode, linkMode_);
     const esp_err_t err = nvs_commit(h);
     nvs_close(h);
     if (err != ESP_OK) ESP_LOGW(TAG, "NVS commit 失败：%s", esp_err_to_name(err));
@@ -140,6 +174,11 @@ void Settings::setDevName(const char* name) {
 void Settings::setMqtt(const char* host, int port) {
     utf8CopyTrunc(mqttHost_, sizeof(mqttHost_), host ? host : "");
     mqttPort_ = port;
+}
+
+void Settings::setMqttAuth(const char* user, const char* pass) {
+    utf8CopyTrunc(mqttUser_, sizeof(mqttUser_), user ? user : "");
+    utf8CopyTrunc(mqttPass_, sizeof(mqttPass_), pass ? pass : "");
 }
 
 void Settings::setTimeoutByIndex(int idx) {

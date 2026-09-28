@@ -69,6 +69,23 @@ int MsgLog::addSending() {
     return 0;
 }
 
+// 服务器主动通知建卡（notify 信令）：复用 addSending 的头部插卡 + id/时间戳，
+// 但无问只有答——ask 槽借来放"GAGA 提醒"来源标签，reply 槽放通知全文，
+// 直接 Replied（NotifySession 已自行亮屏/叮咚，卡只负责呈现）
+int MsgLog::addNotify(const char* text) {
+    const int idx = addSending();   // 占位卡：头部插入 + id + createdAtMs
+    if (idx < 0) return -1;
+    Msg& m = msgs_[0];
+    utf8CopyTrunc(m.ask, sizeof(m.ask), "GAGA 提醒");
+    fontFilterDisplayable(m.ask);
+    utf8CopyTrunc(m.reply, sizeof(m.reply), text ? text : "");
+    fontFilterDisplayable(m.reply);
+    m.state = MsgState::Replied;
+    m.repliedAtMs = millis();
+    version_++;
+    return 0;
+}
+
 // receipt（FIFO）：找第一张 Sending 卡填 ASR 文本，Sending → Waiting
 int MsgLog::fillAsk(const char* text, const char* msgId) {
     if (msgs_ == nullptr) return -1;

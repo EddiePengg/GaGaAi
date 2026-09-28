@@ -6,6 +6,8 @@ idf_component_register(
         "main.cpp"
         "protocol/frame.cpp"
         "ble/GattServer.cpp"
+        "net/WifiTransport.cpp"    # 家模式链路：WiFi 直连 MQTT（ADR-039 B 期落地）
+        "net/LinkManager.cpp"      # 链路总机：BLE/WiFi 互斥 + 自动故障转移
         "input/ButtonHandler.cpp"
         "input/PwrKey.cpp"
         "input/Rtc.cpp"
@@ -24,10 +26,12 @@ idf_component_register(
         "audio/UplinkPump.cpp"
         "rec/Recorder.cpp"
         "talk/TalkSession.cpp"
+        "notify/NotifySession.cpp"  # 服务器主动 TTS 通知：上屏 + ogg_opus 播报
         "motion/Qmi8658.cpp"
         "motion/Wake.cpp"
         "power/Power.cpp"
-        "voice/KeywordWake.cpp"   # 语音唤醒存根（esp-sr 已从构建移除）
+        "voice/KeywordWake.cpp"   # 语音唤醒（esp-sr WakeNet，'W'/设置页开关拉起）
+        "voice/NsnetStub.c"       # NS 模型工厂同名顶替：断 nsnet3/gtcrn 101KB RAM 权重链接（ADR-037）
         "audio/snd_quack.c"       # 鸭叫采样数据
 
         "debug/SerialCmd.cpp"
@@ -38,6 +42,11 @@ idf_component_register(
         espressif__esp_lvgl_adapter             # BSP 的 LVGL 拉起层（Display 自组链路用）
         espressif__esp_audio_codec              # Opus 编解码（直接调 esp_opus_enc/dec_*）
         bt                                      # NimBLE host
+        espressif__esp-sr                       # WakeNet 语音唤醒（ADR-037；KWS 开关拉起）
+        esp_wifi                                # 家模式 STA（LinkManager/WifiTransport）
+        mqtt                                    # esp-mqtt 客户端（家模式直连 broker）
+        esp_netif                               # STA 网卡（WifiTransport 建/销）
+        esp_event                               # WiFi/IP/MQTT 事件循环
         nvs_flash
         json                                    # cJSON（talk 信令/reply 文本解析）
         esp_timer                               # compat.h 的 millis()

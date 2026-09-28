@@ -28,7 +28,8 @@ namespace gaga {
 static const char* TAG = "gaga.ui";
 
 #define FONT_CJK  (&gaga_font_cjk_16)
-#define FONT_NUM  (&lv_font_montserrat_24)  // 时间/字标（sdkconfig 已启用）
+#define FONT_NUM  (&lv_font_montserrat_24)  // 字标/空状态 logo
+#define FONT_NUM_SMALL (&lv_font_montserrat_14)  // 状态栏时间（2026-09-28 改版缩小）
 
 // ---------------------------------------------------------------- 深空黑主题 ----
 // ADR-031：正式视觉取代 M6 验收期黄底诊断色。纯黑底 = AMOLED 黑像素零功耗，
@@ -185,18 +186,16 @@ void Ui::begin(AppState* app, MsgLog* log) {
     lv_obj_set_style_bg_color(scr, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
 
-    // ---- 顶部状态栏（贴圆顶：电量·BLE | 时间 | 设置入口）----
+    // ---- 顶部状态栏（2026-09-28 改版：绿点最左 | 链路模式 | …… | 小时间·电量·内存）----
+    // 用户定稿布局：圆点左移、时间缩小右靠、电量贴时间、新增模式+剩余内存。
     statusBar_ = lv_obj_create(scr);
     lv_obj_remove_style_all(statusBar_);
     lv_obj_set_flex_flow(statusBar_, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(statusBar_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(statusBar_, 14, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(statusBar_, 10, LV_PART_MAIN);
     lv_obj_set_width(statusBar_, LV_SIZE_CONTENT);
     lv_obj_align(statusBar_, LV_ALIGN_TOP_MID, 0, STATUS_Y);
-
-    battLabel_ = makeLabel(statusBar_, FONT_CJK, lv_color_white());
-    lv_label_set_text(battLabel_, "--%");
 
     bleDot_ = lv_obj_create(statusBar_);
     lv_obj_remove_style_all(bleDot_);
@@ -205,8 +204,25 @@ void Ui::begin(AppState* app, MsgLog* log) {
     lv_obj_set_style_bg_color(bleDot_, COL_SUB, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(bleDot_, LV_OPA_COVER, LV_PART_MAIN);
 
-    timeLabel_ = makeLabel(statusBar_, FONT_NUM, lv_color_white());
+    linkModeLabel_ = makeLabel(statusBar_, FONT_CJK, lv_color_white());
+    lv_label_set_text(linkModeLabel_, "BLE");
+
+    {   // 伸展占位：把右侧组（时间/电量/内存）顶到最右
+        lv_obj_t* spacer = lv_obj_create(statusBar_);
+        lv_obj_remove_style_all(spacer);
+        lv_obj_set_size(spacer, 0, 1);
+        lv_obj_set_flex_grow(spacer, 1);
+        lv_obj_clear_flag(spacer, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    timeLabel_ = makeLabel(statusBar_, FONT_NUM_SMALL, lv_color_white());
     lv_label_set_text(timeLabel_, "--:--");
+
+    battLabel_ = makeLabel(statusBar_, FONT_CJK, lv_color_white());
+    lv_label_set_text(battLabel_, "--%");
+
+    memLabel_ = makeLabel(statusBar_, FONT_CJK, COL_SUB);
+    lv_label_set_text(memLabel_, "");
 
     // ---- 主体容器（列表/详情/设置共用的几何：300×290，居中 y+24）----
 
@@ -358,142 +374,10 @@ void Ui::begin(AppState* app, MsgLog* log) {
     lv_label_set_long_mode(detailReply_, LV_LABEL_LONG_WRAP);
     lv_obj_add_flag(detailCont_, LV_OBJ_FLAG_HIDDEN);
 
-    // ---- 设置页（ADR-031：触摸操作，音量/亮度/息屏/提示音/关于）----
-    settingsCont_ = lv_obj_create(scr);
-    lv_obj_remove_style_all(settingsCont_);
-    lv_obj_set_size(settingsCont_, SAFE_W, BODY_H);
-    lv_obj_align(settingsCont_, LV_ALIGN_CENTER, 0, BODY_OY);
-    lv_obj_set_flex_flow(settingsCont_, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(settingsCont_, 10, LV_PART_MAIN);
-    lv_obj_set_scroll_dir(settingsCont_, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(settingsCont_, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_add_flag(settingsCont_, LV_OBJ_FLAG_SCROLLABLE);
-    styleScrollbar(settingsCont_);
-    lv_obj_add_flag(settingsCont_, LV_OBJ_FLAG_HIDDEN);
-
-    backSetBtn_ = makePill(settingsCont_, "← 返回", OPA_CTRL);
-
-    {   // 音量行
-        lv_obj_t* row = makeRow(settingsCont_, "音量");
-        volSlider_ = makeSlider(row, Settings::VOL_MIN, Settings::VOL_MAX);
-        volVal_ = makeLabel(row, FONT_CJK, COL_SUB);
-        lv_obj_set_width(volVal_, 36);
-        lv_obj_set_style_text_align(volVal_, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    }
-    {   // 亮度行
-        lv_obj_t* row = makeRow(settingsCont_, "亮度");
-        briSlider_ = makeSlider(row, Settings::BRIGHT_MIN, Settings::BRIGHT_MAX);
-        briVal_ = makeLabel(row, FONT_CJK, COL_SUB);
-        lv_obj_set_width(briVal_, 36);
-        lv_obj_set_style_text_align(briVal_, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    }
-    {   // 息屏时长行（< 5s/10s/30s/60s > 循环）
-        lv_obj_t* row = makeRow(settingsCont_, "息屏");
-        toLeft_  = makeRoundBtn(row, "<");
-        toVal_   = makeLabel(row, FONT_CJK, lv_color_white());
-        lv_obj_set_flex_grow(toVal_, 1);
-        lv_obj_set_style_text_align(toVal_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        toRight_ = makeRoundBtn(row, ">");
-    }
-    {   // WiFi 行（ADR-039 A 期：显示配置状态；B 期接直连 MQTT 的开关）
-        lv_obj_t* row = makeRow(settingsCont_, "WiFi");
-        makeSpacer(row);
-        wifiVal_ = makeLabel(row, FONT_CJK, COL_SUB);
-    }
-    {   // 提示音行（开/关胶囊）
-        lv_obj_t* row = makeRow(settingsCont_, "提示音");
-        makeSpacer(row);
-        beepToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
-        lv_obj_set_size(beepToggle_, 60, 32);
-        lv_obj_set_style_text_align(beepToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_set_style_radius(beepToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_add_flag(beepToggle_, LV_OBJ_FLAG_CLICKABLE);
-    }
-    {   // 语音唤醒行（开/关胶囊，ADR-037）：开 = mic 常开本地听"Hi,乐鑫"
-        lv_obj_t* row = makeRow(settingsCont_, "语音唤醒");
-        makeSpacer(row);
-        kwsToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
-        lv_obj_set_size(kwsToggle_, 60, 32);
-        lv_obj_set_style_text_align(kwsToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_set_style_radius(kwsToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_add_flag(kwsToggle_, LV_OBJ_FLAG_CLICKABLE);
-    }
-    {   // 对话字幕行（开/关胶囊，ADR-034）：关 = talk 纯语音模式（防长文本卡顿）
-        lv_obj_t* row = makeRow(settingsCont_, "对话字幕");
-        makeSpacer(row);
-        subsToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
-        lv_obj_set_size(subsToggle_, 60, 32);
-        lv_obj_set_style_text_align(subsToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_set_style_radius(subsToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_add_flag(subsToggle_, LV_OBJ_FLAG_CLICKABLE);
-    }
-    {   // 摇动录音行（开/关胶囊）：摔倒/磕碰误触的用户开关（2026-09-25）
-        lv_obj_t* row = makeRow(settingsCont_, "摇动录音");
-        makeSpacer(row);
-        shakeToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
-        lv_obj_set_size(shakeToggle_, 60, 32);
-        lv_obj_set_style_text_align(shakeToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_set_style_radius(shakeToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_add_flag(shakeToggle_, LV_OBJ_FLAG_CLICKABLE);
-    }
-    {   // 抬手亮屏行（开/关胶囊）：挂脖拎起自动点亮，手动开关
-        lv_obj_t* row = makeRow(settingsCont_, "抬手亮屏");
-        makeSpacer(row);
-        liftToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
-        lv_obj_set_size(liftToggle_, 60, 32);
-        lv_obj_set_style_text_align(liftToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_set_style_radius(liftToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_add_flag(liftToggle_, LV_OBJ_FLAG_CLICKABLE);
-    }
-    {   // 自动转向行（开/关胶囊）：持握角变化内容跟着转（2026-09-25）
-        lv_obj_t* row = makeRow(settingsCont_, "自动转向");
-        makeSpacer(row);
-        arotToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
-        lv_obj_set_size(arotToggle_, 60, 32);
-        lv_obj_set_style_text_align(arotToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_set_style_radius(arotToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_add_flag(arotToggle_, LV_OBJ_FLAG_CLICKABLE);
-    }
-    {   // 屏幕方向行（< 正/反 > 手动固定；自动转向关着时生效，2026-09-25）
-        lv_obj_t* row = makeRow(settingsCont_, "屏幕方向");
-        flipLeft_ = makeRoundBtn(row, "<");
-        flipVal_ = makeLabel(row, FONT_CJK, lv_color_white());
-        lv_obj_set_flex_grow(flipVal_, 1);
-        lv_obj_set_style_text_align(flipVal_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        flipRight_ = makeRoundBtn(row, ">");
-    }
-    {   // 对话引擎行（< 豆包/星辰 > 循环，ADR-035）：talk 用哪个实时后端
-        lv_obj_t* row = makeRow(settingsCont_, "引擎");
-        prvLeft_  = makeRoundBtn(row, "<");
-        prvVal_   = makeLabel(row, FONT_CJK, lv_color_white());
-        lv_obj_set_flex_grow(prvVal_, 1);
-        lv_obj_set_style_text_align(prvVal_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        prvRight_ = makeRoundBtn(row, ">");
-    }
-    {   // 关于行（点击展开；整行都是点击区）
-        lv_obj_t* row = makeRow(settingsCont_, "关于");
-        makeSpacer(row);
-        lv_obj_t* arrow = makeLabel(row, FONT_CJK, COL_SUB);
-        lv_label_set_text(arrow, ">");
-        lv_obj_set_style_text_align(arrow, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(row, [](lv_event_t*) {
-            if (!s_ui) return;
-            s_ui->aboutOpen_ = !s_ui->aboutOpen_;
-            s_ui->renderSettings();
-        }, LV_EVENT_CLICKED, nullptr);
-        aboutCont_ = lv_obj_create(settingsCont_);
-        lv_obj_remove_style_all(aboutCont_);
-        lv_obj_set_width(aboutCont_, lv_pct(100));
-        lv_obj_set_style_bg_color(aboutCont_, lv_color_white(), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(aboutCont_, LV_OPA_10, LV_PART_MAIN);
-        lv_obj_set_style_radius(aboutCont_, 16, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(aboutCont_, 14, LV_PART_MAIN);
-        lv_obj_add_flag(aboutCont_, LV_OBJ_FLAG_HIDDEN);
-        aboutLabel_ = makeLabel(aboutCont_, FONT_CJK, COL_SUB);
-        lv_obj_set_width(aboutLabel_, lv_pct(100));
-        lv_label_set_long_mode(aboutLabel_, LV_LABEL_LONG_WRAP);
-    }
+    // 设置页（ADR-031）：boot 时即建。懒构建结构保留（buildSettings 独立函数），
+    // 但"延迟到首次下拉才建"在真机触发启动楔死（esp_timer 自旋/TWDT，2026-09-28
+    // 凌晨实锤）——根因未查明（疑与 LVGL 渲染期构建的时序有关），Phase C 专项再战。
+    buildSettings();
 
     // ---- 录音覆盖层 ----
     recDot_ = lv_obj_create(scr);
@@ -708,6 +592,20 @@ void Ui::begin(AppState* app, MsgLog* log) {
                            (s_ui->settings_->talkProviderIndex() + 1) % n, true);
     }, LV_EVENT_CLICKED, nullptr);
 
+    // 工作模式档位循环（ADR-065：Auto/外出·BLE/在家·WiFi → LinkManager + NVS 落盘）
+    lv_obj_add_event_cb(lmLeft_, [](lv_event_t*) {
+        if (!s_ui || s_ui->settings_ == nullptr) return;
+        const int n = Settings::LINK_MODE_COUNT;
+        s_ui->applySetting(SettingKey::LinkMode,
+                           (s_ui->settings_->linkMode() + n - 1) % n, true);
+    }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(lmRight_, [](lv_event_t*) {
+        if (!s_ui || s_ui->settings_ == nullptr) return;
+        const int n = Settings::LINK_MODE_COUNT;
+        s_ui->applySetting(SettingKey::LinkMode,
+                           (s_ui->settings_->linkMode() + 1) % n, true);
+    }, LV_EVENT_CLICKED, nullptr);
+
     // 状态联动：状态机一变就重算视图；屏幕亮灭直接驱动面板 DISPOFF/DISPON
     app_->onRecStateChange([this](RecState s) {
         if (s == RecState::Recording) { settingsOpen_ = false; companionOpen_ = false; }
@@ -770,8 +668,10 @@ void Ui::applyState() {
     else          lv_obj_add_flag(listCont_, LV_OBJ_FLAG_HIDDEN);
     if (showDet) lv_obj_clear_flag(detailCont_, LV_OBJ_FLAG_HIDDEN);
     else         lv_obj_add_flag(detailCont_, LV_OBJ_FLAG_HIDDEN);
-    if (showSet) lv_obj_clear_flag(settingsCont_, LV_OBJ_FLAG_HIDDEN);
-    else         lv_obj_add_flag(settingsCont_, LV_OBJ_FLAG_HIDDEN);
+    if (settingsCont_ != nullptr) {   // 懒构建：未建时无对象可显隐
+        if (showSet) lv_obj_clear_flag(settingsCont_, LV_OBJ_FLAG_HIDDEN);
+        else         lv_obj_add_flag(settingsCont_, LV_OBJ_FLAG_HIDDEN);
+    }
     if (showComp) {
         lv_obj_clear_flag(companionCont_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(duckImg_, LV_OBJ_FLAG_HIDDEN);
@@ -1028,6 +928,7 @@ void Ui::renderStatus() {
 
 // 刷设置页：slider/开关/关于全部对齐 settings_ 当前值（进页与每次改动后都刷）
 void Ui::renderSettings() {
+    if (settingsCont_ == nullptr) return;  // 懒构建：未建无事可刷
     if (settings_ == nullptr) return;
     lv_slider_set_value(volSlider_, settings_->volume(), LV_ANIM_OFF);
     char buf[16];
@@ -1051,8 +952,8 @@ void Ui::renderSettings() {
     setTogglePill(arotToggle_,  settings_->autoRotateEnabled(), "");
     lv_label_set_text(flipVal_, settings_->screenFlip() ? "反" : "正");
     // 音效方案已定稿（嘎=录开/发，叮咚=收，噗噗=错），无设置项
-    // WiFi 配置状态
-    lv_label_set_text(wifiVal_, settings_->wifiConfigured() ? "已配置" : "未配置");
+    // 工作模式当前档位（链路状态行由 main 经 setLinkStatus 推送，这里不碰）
+    lv_label_set_text(lmVal_, Settings::LINK_MODE_LABELS[settings_->linkMode()]);
     // 对话引擎当前档位标签
     lv_label_set_text(prvVal_, Settings::TALK_PROVIDER_LABELS[
                                   settings_->talkProviderIndex()]);
@@ -1090,6 +991,7 @@ void Ui::applySetting(SettingKey key, int value, bool save) {
     case SettingKey::AutoRotate:  settings_->setAutoRotateEnabled(value != 0); break;
     case SettingKey::ScreenFlip:  settings_->setScreenFlip(value != 0); break;
     case SettingKey::TalkProvider: settings_->setTalkProviderByIndex(value); break;
+    case SettingKey::LinkMode:    settings_->setLinkMode(value); break;
     }
     if (applyCb_) applyCb_(key, value);
     if (save) settings_->save();
@@ -1100,6 +1002,30 @@ void Ui::applySetting(SettingKey key, int value, bool save) {
 void Ui::setBleConnected(bool connected) {
     if (!displayLock(500)) return;
     lv_obj_set_style_bg_color(bleDot_, connected ? COL_GREEN : COL_SUB, LV_PART_MAIN);
+    displayUnlock();
+}
+
+// 链路状态 → 设置页"当前链路"行（main 从 LinkManager 轮询推送，仅变化时调）
+void Ui::setLinkStatus(const char* text) {
+    if (!displayLock(500)) return;
+    lv_label_set_text(linkStatusVal_, text);
+    displayUnlock();
+}
+
+// 状态栏：链路模式文字 + 圆点（2s 节流推送；连接态突变仍走 setBleConnected 快路径）
+void Ui::setStatusLink(const char* mode, bool connected) {
+    if (!displayLock(500)) return;
+    lv_label_set_text(linkModeLabel_, mode);
+    lv_obj_set_style_bg_color(bleDot_, connected ? COL_GREEN : COL_SUB, LV_PART_MAIN);
+    displayUnlock();
+}
+
+// 状态栏：内部剩余内存（KB，2s 节流推送）
+void Ui::setStatusMem(int freeKb) {
+    if (!displayLock(500)) return;
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%dK", freeKb);
+    lv_label_set_text(memLabel_, buf);
     displayUnlock();
 }
 
@@ -1255,9 +1181,161 @@ void Ui::goHome() {
 
 // ---------------------------------------------------------------- 设置页进出 ----
 
+// 设置页懒构建（测量版）：整棵设置页控件树从 begin() 挪到这里，
+// 首次 openSettings() 时才创建。首次下拉有 ~百毫秒级构建抖动。
+void Ui::buildSettings() {
+    lv_obj_t* scr = lv_screen_active();
+    // ---- 设置页（ADR-031：触摸操作，音量/亮度/息屏/提示音/关于）----
+    settingsCont_ = lv_obj_create(scr);
+    lv_obj_remove_style_all(settingsCont_);
+    lv_obj_set_size(settingsCont_, SAFE_W, BODY_H);
+    lv_obj_align(settingsCont_, LV_ALIGN_CENTER, 0, BODY_OY);
+    lv_obj_set_flex_flow(settingsCont_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(settingsCont_, 10, LV_PART_MAIN);
+    lv_obj_set_scroll_dir(settingsCont_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(settingsCont_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(settingsCont_, LV_OBJ_FLAG_SCROLLABLE);
+    styleScrollbar(settingsCont_);
+    lv_obj_add_flag(settingsCont_, LV_OBJ_FLAG_HIDDEN);
+
+    backSetBtn_ = makePill(settingsCont_, "← 返回", OPA_CTRL);
+
+    {   // 音量行
+        lv_obj_t* row = makeRow(settingsCont_, "音量");
+        volSlider_ = makeSlider(row, Settings::VOL_MIN, Settings::VOL_MAX);
+        volVal_ = makeLabel(row, FONT_CJK, COL_SUB);
+        lv_obj_set_width(volVal_, 36);
+        lv_obj_set_style_text_align(volVal_, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    }
+    {   // 亮度行
+        lv_obj_t* row = makeRow(settingsCont_, "亮度");
+        briSlider_ = makeSlider(row, Settings::BRIGHT_MIN, Settings::BRIGHT_MAX);
+        briVal_ = makeLabel(row, FONT_CJK, COL_SUB);
+        lv_obj_set_width(briVal_, 36);
+        lv_obj_set_style_text_align(briVal_, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    }
+    {   // 息屏时长行（< 5s/10s/30s/60s > 循环）
+        lv_obj_t* row = makeRow(settingsCont_, "息屏");
+        toLeft_  = makeRoundBtn(row, "<");
+        toVal_   = makeLabel(row, FONT_CJK, lv_color_white());
+        lv_obj_set_flex_grow(toVal_, 1);
+        lv_obj_set_style_text_align(toVal_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        toRight_ = makeRoundBtn(row, ">");
+    }
+    {   // 当前链路行（只读：main 从 LinkManager 轮询推送，实时显示 BLE/WiFi/切换中）
+        lv_obj_t* row = makeRow(settingsCont_, "当前链路");
+        makeSpacer(row);
+        linkStatusVal_ = makeLabel(row, FONT_CJK, COL_SUB);
+        lv_label_set_text(linkStatusVal_, "…");
+    }
+    {   // 工作模式行（< 自动/外出·BLE/在家·WiFi > 循环；ADR-065 互斥架构的手动入口）
+        lv_obj_t* row = makeRow(settingsCont_, "工作模式");
+        lmLeft_  = makeRoundBtn(row, "<");
+        lmVal_   = makeLabel(row, FONT_CJK, lv_color_white());
+        lv_obj_set_flex_grow(lmVal_, 1);
+        lv_obj_set_style_text_align(lmVal_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lmRight_ = makeRoundBtn(row, ">");
+    }
+    {   // 提示音行（开/关胶囊）
+        lv_obj_t* row = makeRow(settingsCont_, "提示音");
+        makeSpacer(row);
+        beepToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
+        lv_obj_set_size(beepToggle_, 60, 32);
+        lv_obj_set_style_text_align(beepToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_radius(beepToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_add_flag(beepToggle_, LV_OBJ_FLAG_CLICKABLE);
+    }
+    {   // 语音唤醒行（开/关胶囊，ADR-037）：开 = mic 常开本地听"Hi,乐鑫"
+        lv_obj_t* row = makeRow(settingsCont_, "语音唤醒");
+        makeSpacer(row);
+        kwsToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
+        lv_obj_set_size(kwsToggle_, 60, 32);
+        lv_obj_set_style_text_align(kwsToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_radius(kwsToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_add_flag(kwsToggle_, LV_OBJ_FLAG_CLICKABLE);
+    }
+    {   // 对话字幕行（开/关胶囊，ADR-034）：关 = talk 纯语音模式（防长文本卡顿）
+        lv_obj_t* row = makeRow(settingsCont_, "对话字幕");
+        makeSpacer(row);
+        subsToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
+        lv_obj_set_size(subsToggle_, 60, 32);
+        lv_obj_set_style_text_align(subsToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_radius(subsToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_add_flag(subsToggle_, LV_OBJ_FLAG_CLICKABLE);
+    }
+    {   // 摇动录音行（开/关胶囊）：摔倒/磕碰误触的用户开关（2026-09-25）
+        lv_obj_t* row = makeRow(settingsCont_, "摇动录音");
+        makeSpacer(row);
+        shakeToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
+        lv_obj_set_size(shakeToggle_, 60, 32);
+        lv_obj_set_style_text_align(shakeToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_radius(shakeToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_add_flag(shakeToggle_, LV_OBJ_FLAG_CLICKABLE);
+    }
+    {   // 抬手亮屏行（开/关胶囊）：挂脖拎起自动点亮，手动开关
+        lv_obj_t* row = makeRow(settingsCont_, "抬手亮屏");
+        makeSpacer(row);
+        liftToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
+        lv_obj_set_size(liftToggle_, 60, 32);
+        lv_obj_set_style_text_align(liftToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_radius(liftToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_add_flag(liftToggle_, LV_OBJ_FLAG_CLICKABLE);
+    }
+    {   // 自动转向行（开/关胶囊）：持握角变化内容跟着转（2026-09-25）
+        lv_obj_t* row = makeRow(settingsCont_, "自动转向");
+        makeSpacer(row);
+        arotToggle_ = makeLabel(row, FONT_CJK, lv_color_black());
+        lv_obj_set_size(arotToggle_, 60, 32);
+        lv_obj_set_style_text_align(arotToggle_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_radius(arotToggle_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_add_flag(arotToggle_, LV_OBJ_FLAG_CLICKABLE);
+    }
+    {   // 屏幕方向行（< 正/反 > 手动固定；自动转向关着时生效，2026-09-25）
+        lv_obj_t* row = makeRow(settingsCont_, "屏幕方向");
+        flipLeft_ = makeRoundBtn(row, "<");
+        flipVal_ = makeLabel(row, FONT_CJK, lv_color_white());
+        lv_obj_set_flex_grow(flipVal_, 1);
+        lv_obj_set_style_text_align(flipVal_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        flipRight_ = makeRoundBtn(row, ">");
+    }
+    {   // 对话引擎行（< 豆包/星辰 > 循环，ADR-035）：talk 用哪个实时后端
+        lv_obj_t* row = makeRow(settingsCont_, "引擎");
+        prvLeft_  = makeRoundBtn(row, "<");
+        prvVal_   = makeLabel(row, FONT_CJK, lv_color_white());
+        lv_obj_set_flex_grow(prvVal_, 1);
+        lv_obj_set_style_text_align(prvVal_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        prvRight_ = makeRoundBtn(row, ">");
+    }
+    {   // 关于行（点击展开；整行都是点击区）
+        lv_obj_t* row = makeRow(settingsCont_, "关于");
+        makeSpacer(row);
+        lv_obj_t* arrow = makeLabel(row, FONT_CJK, COL_SUB);
+        lv_label_set_text(arrow, ">");
+        lv_obj_set_style_text_align(arrow, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(row, [](lv_event_t*) {
+            if (!s_ui) return;
+            s_ui->aboutOpen_ = !s_ui->aboutOpen_;
+            s_ui->renderSettings();
+        }, LV_EVENT_CLICKED, nullptr);
+        aboutCont_ = lv_obj_create(settingsCont_);
+        lv_obj_remove_style_all(aboutCont_);
+        lv_obj_set_width(aboutCont_, lv_pct(100));
+        lv_obj_set_style_bg_color(aboutCont_, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(aboutCont_, LV_OPA_10, LV_PART_MAIN);
+        lv_obj_set_style_radius(aboutCont_, 16, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(aboutCont_, 14, LV_PART_MAIN);
+        lv_obj_add_flag(aboutCont_, LV_OBJ_FLAG_HIDDEN);
+        aboutLabel_ = makeLabel(aboutCont_, FONT_CJK, COL_SUB);
+        lv_obj_set_width(aboutLabel_, lv_pct(100));
+        lv_label_set_long_mode(aboutLabel_, LV_LABEL_LONG_WRAP);
+    }
+}
+
 // 状态栏"设置"入口：开页即按 settings_ 现值刷一遍（含关于区现查电量）
 void Ui::openSettings() {
     if (settings_ == nullptr) return;
+    if (settingsCont_ == nullptr) buildSettings();   // 懒构建：首次进入才建（测量）
     settingsOpen_ = true;
     detailId_ = 0;   // 设置与详情互斥，进设置视为离开详情
     lv_obj_scroll_to_y(settingsCont_, 0, LV_ANIM_OFF);  // 每次进入从顶部开始

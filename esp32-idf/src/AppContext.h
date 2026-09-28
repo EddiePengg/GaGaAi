@@ -11,7 +11,9 @@ class Settings;
 class Ui;
 class AudioPipe;
 class Link;
+class LinkManager;
 class TalkSession;
+class NotifySession;
 class OpusEnc;
 class Recorder;
 class UplinkPump;
@@ -26,8 +28,10 @@ struct AppContext {
     Settings*    settings = nullptr; // 用户设置（NVS）
     Ui*          ui      = nullptr;  // 界面
     AudioPipe*   audio   = nullptr;  // 音频前端
-    Link*        link    = nullptr;  // 当前链路（BLE 或 WiFi，ADR-039）
+    Link*        link    = nullptr;  // 当前链路（LinkManager 代理，ADR-039 + 2026-09-27 自动故障转移）
+    LinkManager* net    = nullptr;  // 链路总机本体（串口调试直达：'N' 切模式）
     TalkSession* talk    = nullptr;  // realtime 对话
+    NotifySession* notify = nullptr; // 服务器主动 TTS 通知（notify 信令 + 非 talk 态 0x01 帧）
     OpusEnc*     enc     = nullptr;  // Opus 编码器
     Recorder*    rec     = nullptr;  // 录音语义（点对点开合/确认窗/建卡）
     UplinkPump*  pump    = nullptr;  // 上行泵（mic→Opus→BLE）

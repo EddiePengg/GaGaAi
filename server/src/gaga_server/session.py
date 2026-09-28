@@ -49,6 +49,7 @@ class SessionManager:
         self.talk = talk                  # None = realtime 未启用（未配 key 等）
         self.stream_asr = stream_asr      # None = 批处理模式（local_whisper）
         self.device = ""
+        self.device_name = ""   # 设备显示名（ADR-064，hello/rec_start 的 name 字段）
         self.fw = ""
         self._buf: list[bytes] = []
         self._recording = False
@@ -130,13 +131,21 @@ class SessionManager:
         if sig == "hello":
             self.device = str(msg.get("device", ""))
             self.fw = str(msg.get("fw", ""))
-            log.info("设备登记: %s fw=%s", self.device, self.fw)
+            # 显示名（ADR-064）：设备端 NVS 里配的人话名字，投递署名优先用它
+            nm = str(msg.get("name", "")).strip()
+            if nm:
+                self.device_name = nm[:32]
+            log.info("设备登记: %s（%s）fw=%s", self.device,
+                     self.device_name or "未命名", self.fw)
             # hello_ack：纯对时（envelope ts 自动补），设备状态栏时钟开机即校准
             self.publish_json({"type": "hello_ack"})
         elif sig == "rec_start":
             # 本段归属设备（2026-09-27 多设备串扰修复）：信令显式携带优先，
             # 回落 hello 登记（旧固件）。receipt/对账都按它记账。
             self._rec_device = str(msg.get("device", "")) or self.device
+            nm = str(msg.get("name", "")).strip()   # 改名即时生效：随段刷新
+            if nm:
+                self.device_name = nm[:32]
             if self.talk is not None and self.talk.is_active():
                 self.publish_json({"type": "error", "code": "BUSY",
                                    "msg": "实时对话进行中，不能录音"})
@@ -364,9 +373,13 @@ class SessionManager:
             self._result_signals.append((dev, signal))
         self.publish_json(signal)
 
+    def _display(self) -> str:
+        """投递署名（ADR-064）：设备显示名优先，空则回退设备 ID（旧行为）"""
+        return self.device_name or self.device
+
     def _run(self, packets: list[bytes], archive_path: Path | None = None) -> None:
         """本地批处理路径（默认链路 + 流式失败的降级兜底）。"""
-        result = self.pipeline.process_opus_packets(packets, device=self.device)
+        result = self.pipeline.process_opus_packets(packets, device=self._display())
         self._publish_result(result, archive_path)
 
     # ---- 流式回调（volc-asr 线程触发；带 session 参数区分多段并发收尾）----
@@ -375,7 +388,7 @@ class SessionManager:
         latency = (time.monotonic() - stream.rec_stop_ts
                    if stream.rec_stop_ts else -1)
         log.info("流式 ASR 终稿: %r（rec_stop→终稿 %.2fs）", text, latency)
-        result = self.pipeline.deliver_text(text, device=self.device)
+        result = self.pipeline.deliver_text(text, device=self._display())
         self._publish_result(result, getattr(stream, "archive_path", None))
 
     def _on_stream_definite(self, stream: "StreamASRSession") -> None:

@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+<LinearLayout
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -7,6 +11,186 @@
     android:paddingTop="10dp"
     android:paddingEnd="22dp"
     android:paddingBottom="6dp">
+
+    <!-- ============ 服务器（MQTT）配置（2026-09-27 从主屏迁入） ============ -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="📡 服务器（MQTT）"
+        android:textColor="@color/duck_yellow_dark"
+        android:textSize="15sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/etBrokerHost"
+            android:layout_width="0dp"
+            android:layout_height="46dp"
+            android:layout_weight="1.5"
+            android:background="@drawable/bg_input"
+            android:hint="Server host"
+            android:inputType="textUri"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:singleLine="true"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/etBrokerPort"
+            android:layout_width="0dp"
+            android:layout_height="46dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:hint="Port"
+            android:inputType="number"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:singleLine="true"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnSaveBroker"
+            android:layout_width="wrap_content"
+            android:layout_height="46dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_btn_start"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:stateListAnimator="@null"
+            android:text="💾 保存"
+            android:textAllCaps="false"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/etMqttUser"
+            android:layout_width="0dp"
+            android:layout_height="46dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:hint="MQTT 用户名（可选）"
+            android:inputType="text"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:singleLine="true"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/etMqttPass"
+            android:layout_width="0dp"
+            android:layout_height="46dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:hint="MQTT 密码（可选）"
+            android:inputType="textPassword"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:singleLine="true"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="4dp"
+        android:background="@color/card_stroke" />
+
+    <!-- ============ 嘎嘎配网（家模式，ADR-065）============ -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="🦆 嘎嘎配网（家模式）"
+        android:textColor="@color/duck_yellow_dark"
+        android:textSize="15sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/etWifiSsid"
+            android:layout_width="0dp"
+            android:layout_height="46dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:hint="WiFi 名称（可从列表选）"
+            android:inputType="text"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:singleLine="true"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnPickWifi"
+            android:layout_width="wrap_content"
+            android:layout_height="46dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_btn_start"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:stateListAnimator="@null"
+            android:text="📶 列表"
+            android:textAllCaps="false"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <EditText
+        android:id="@+id/etWifiPass"
+        android:layout_width="match_parent"
+        android:layout_height="46dp"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_input"
+        android:hint="WiFi 密码"
+        android:inputType="textPassword"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:singleLine="true"
+        android:textSize="14sp" />
+
+    <Button
+        android:id="@+id/btnSendWifi"
+        android:layout_width="match_parent"
+        android:layout_height="46dp"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_btn_start"
+        android:stateListAnimator="@null"
+        android:text="📡 下发到嘎嘎"
+        android:textAllCaps="false"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="WiFi 凭证 + 上面的服务器配置（含 MQTT 账号）一起存进嘎嘎。蓝牙断开 60 秒后它自动切换家模式直连。"
+        android:textColor="@color/ink_soft"
+        android:textSize="12sp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="4dp"
+        android:background="@color/card_stroke" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -42,6 +226,58 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="12dp" />
     </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="4dp"
+        android:background="@color/card_stroke" />
+
+    <!-- 设备名（ADR-064）：群里署名用。名字经 BLE set_name 信令存进设备 NVS，
+         App 只是设置入口（哑管道纪律不破）——所以这里叫"Set"而不存本地 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="🦆 Device name（群里署名）"
+        android:textColor="@color/duck_yellow_dark"
+        android:textSize="15sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/etDevName"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="e.g. 胸前嘎嘎"
+            android:inputType="text"
+            android:maxLines="1"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnSendName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:minWidth="72dp"
+            android:text="Set"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="发到群里的消息用这个名字署名。名字存在设备上（需蓝牙已连接），下一条消息生效。"
+        android:textColor="@color/ink_soft"
+        android:textSize="12sp" />
 
     <View
         android:layout_width="match_parent"
@@ -131,3 +367,4 @@
         android:textColor="@color/ink_soft"
         android:textSize="13sp" />
 </LinearLayout>
+</ScrollView>

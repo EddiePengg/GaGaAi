@@ -118,7 +118,7 @@ static int gapEvent(ble_gap_event* event, void* arg) {
 
 // 组装广播参数并开广播：广播包放 Service UUID，名字放扫描响应包
 void GattServer::startAdvertising() {
-    if (connected_) return;  // 看门狗/断连竞态兜底：已连接就不广播（单连接设计）
+    if (connected_ || stopping_ || !started_) return;  // 看门狗/断连竞态/拆栈兜底
     // 广播包：flags + 完整 128-bit Service UUID（App 按名称前缀 + UUID 过滤）
     ble_hs_adv_fields fields;
     memset(&fields, 0, sizeof(fields));
@@ -228,10 +228,50 @@ bool GattServer::begin(const char* namePrefix) {
     }
     ble_att_set_preferred_mtu(517);  // protocol.md §1：MTU 协商目标 517
 
+    if (sendMtx_ != nullptr) vSemaphoreDelete(sendMtx_);  // 重开防泄漏
     sendMtx_ = xSemaphoreCreateMutex();  // 发送互斥（重构：原 main.cpp 的裸锁下沉到这）
 
+    stopping_ = false;
+    started_  = true;
     nimble_port_freertos_init(hostTask);
     return true;
+}
+
+// 可逆拆栈：见头文件注释。串口/app 任务上下文调用（满足"不在 host 任务里"约束）。
+bool GattServer::end() {
+    if (!started_) return true;
+    stopping_ = true;
+
+    // 停广播；已连接则发起断开——terminate 触发的 DISCONNECT 事件在 host 任务里
+    // 跑 handleDisconnect，stopping_ 守卫会拦住"恢复广播"
+    ble_gap_adv_stop();
+    if (connected_) {
+        ble_gap_terminate(connHandle_, BLE_ERR_REM_USER_CONN_TERM);
+        vTaskDelay(pdMS_TO_TICKS(150));  // 给 host 任务处理窗口
+    }
+
+    nimble_port_stop();  // 阻塞至 host stop 完成（sem 等待）
+
+    // 等 host 任务自删：hostTask 里 nimble_port_run 返回后调 freertos_deinit 自杀
+    for (int i = 0; i < 50; i++) {
+        if (xTaskGetHandle("nimble_host") == nullptr) break;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    const int rc = nimble_port_deinit();  // host deinit + 控制器 disable/deinit（打包）
+
+    if (sendMtx_ != nullptr) {
+        vSemaphoreDelete(sendMtx_);
+        sendMtx_ = nullptr;
+    }
+    started_      = false;
+    stopping_     = false;
+    connected_    = false;
+    synced_       = false;
+    connHandle_   = 0xFFFF;
+    txValHandle_  = 0;
+    ESP_LOGI(TAG, "BLE 栈已拆除（可重开）");
+    return rc == 0;
 }
 
 // 发一帧给 App（NUS 风格 TX notify）：按协商 MTU 切成若干物理包逐个 notify。
@@ -277,8 +317,16 @@ bool GattServer::sendJson(const char* json) {
 }
 
 // App → 设备的写入数据转交帧重组器
+// 临时诊断（2026-09-28 BLE 下行字节流损坏定位用）：RX 逐包计数日志。
+// 降为 ESP_LOGD：默认日志级别不输出，排障时串口 'G' 开 DEBUG 即恢复。
+static uint32_t s_rxDiagTotal = 0;
 void GattServer::handleRxWrite(const uint8_t* data, size_t len) {
     lastRxMs_ = millis();  // 残帧看门狗基准（host 任务写/app 任务读，32 位免锁）
+    s_rxDiagTotal += len;
+    ESP_LOGD("gaga.blerx", "rx %uB head=%02x %02x %02x total=%lu",
+             (unsigned)len,
+             len > 0 ? data[0] : 0, len > 1 ? data[1] : 0, len > 2 ? data[2] : 0,
+             (unsigned long)s_rxDiagTotal);
     decoder_.feed(data, len);
 }
 
@@ -318,7 +366,7 @@ void GattServer::handleDisconnect() {
     mtu_        = DEFAULT_MTU;
     decoder_.reset();  // 丢弃半个残帧
     if (connCb_) connCb_(false);
-    startAdvertising();  // 断连后立刻恢复广播，等 App 退避重连
+    if (!stopping_) startAdvertising();  // 拆栈中不恢复广播
 }
 
 // 记下 MTU 协商结果——sendFrame 的分包大小由此决定
@@ -337,6 +385,7 @@ void GattServer::handleMtuChange(uint16_t mtu) {
 //   未连接 && 广播不在跑 → ble_gap_adv_stop 强停 + 重新 startAdvertising。
 // ble_gap_adv_active/start/stop 都走 host 内部锁，app 任务调是安全的。
 void GattServer::tick() {
+    if (!started_ || stopping_) return;         // 家模式/拆栈期：BLE 栈不在，全部豁免
     if (!synced_) return;                       // host 还没 sync：广播操作无意义
     const uint32_t now = millis();
     // 残帧看门狗（ADR-060）：字节流中断 >1s 仍停在半个帧里 = 续包在合批/

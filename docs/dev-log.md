@@ -533,3 +533,133 @@ Hermes 回复点亮。全链路走自然流程，零特殊逻辑。已编译，�
     查询自动停止（hasStaleSending 变 false）。
 - 竖条位置微调：贴左缘 8px（原 16px 太远、距文字过近）。
 - ⚠️ 需重启 gaga-server 加载 session.py 变更。
+
+### 2026-09-27 深夜：内存专项 + WiFi 家模式落地（fw-idf 0.6.0，ADR-065）
+
+用户目标：今晚内存+WiFi+切换，ESP-SR 明天。设备插机全程实测驱动。
+
+- **内存**：9/27 晨实测内部仅剩 13.5KB（9/25 后新功能吃掉 ~28KB）。四刀配置级
+  裁剪后 BLE 外出基线 9.7KB（刷屏缓冲退 4 行占 3.7KB——9/25 残影病同型防御），
+  拆 BLE 后 46KB 可用，WiFi 全程 26KB → 家模式（WiFi+IP+MQTT 常驻）9.3KB。
+- **架构**：LinkManager 总机（Link 代理 + 故障转移：BLE 死 60s→WiFi /
+  WiFi 30s 起不来·掉线 90s→BLE）+ GattServer/WifiTransport 可逆 end()。
+  业务侧 ctx.link 永不变。手机在切换后 4s 自动重连（App 既有重连机制天然兼容）。
+- **排障八轮实录**（详见 ADR-065）：emi.c:164=WiFi IRAM 偷 26KB 致蓝牙控制器
+  内存池（30/35KiB 实锤）分不到；STATIC_TX 默认 16=26KB 大象致 init NO_MEM
+  （43KB 堆空闲也失败的反直觉案）；'w' 崩=PSRAM 栈写 NVS 撞缓存冻结断言；
+  跨版本幽灵重启=wifiEvent 回调 handler_args 传 nullptr（空 this，
+  GOT_IP 即 StoreProhibited——全量无过滤抓包+addr2line 锁定，此前被日志
+  过滤窗口漏掉三轮）。预热（调试脚手架）最终退役：deinit 泄漏，每开机漏一次。
+- **协议**：wifi_cfg 扩展 host/port/mqtt_user/mqtt_pass 可选字段；串口
+  'w' 配置行 / 'N' 切链路模式 / 'G' 全局 DEBUG。
+- **收尾遗留**：设置页链路状态+手动切换（规划已定）；APK WiFi 配置 UI
+  恢复（git 历史）；LVGL 懒加载抬基线给 ESP-SR 腾地；家模式功耗复测入
+  power-log。
+
+### 2026-09-28 凌晨：链路可视化 + 手动切换（fw-idf 0.6.1，续 ADR-065）
+
+用户实测反馈驱动："蓝牙到底有没有切 WiFi？没法看也没法控"。
+- **设置页链路区**：新"当前链路"行（外出·BLE 已连/等待、在家·WiFi 已连/连接中、
+  切换中——main 从 LinkManager 2s 节流推送）+ "工作模式"三档循环行
+  （自动/外出·BLE/在家·WiFi），交互与引擎行同款 < > 循环。
+- **持久化**：Settings `link_mode` NVS 键（0/1/2），LinkManager 开机读偏好；
+  设置页/串口 'N' 都经 setMode→onModePersist 回调落盘（重启恢复实测通过）。
+- **延迟切换**：偏好"在家·WiFi"开机不再直接 init WiFi——boot 堆碎片化让
+  WiFi init 多付 ~8KB 税（实锤开机直连只剩 1.7KB，刷屏 3.7KB 分不出）。
+  改为先启 BLE、3 秒后走成熟切换路径（拆 BLE 腾大连续块再 init）。
+- **APK 分工**：WiFi 配网 UI 移交 zcode；固件侧通道已就绪（wifi_cfg 信令 +
+  host/port/mqtt_user/mqtt_pass 可选字段，protocol.md §3 已同步），
+  activity_main.xml 已留好"嘎嘎的 WiFi（家模式）"卡片布局（zcode 只需接 Kotlin）。
+- **验证**：模式切换+持久化+重启恢复全部实测；强制WiFi 3s 延迟切换实测
+  （BLE 先起→3s→切换→MQTT 已连接）。
+- ⚠️ **异常事件待观察**：0.6.1 验证全部通过后约 20 分钟，factory 分区突现
+  invalid segment length 0xffffffff（=擦除态），设备进无可用分区死循环；
+  重新烧录恢复，NVS 设置幸存（模式/凭证都在）。事发前最后动作：'N' 切模式
+  （NVS 写）+ RTS 复位 + WiFi 模式常驻。暂记为一次性事件——若复现，优先
+  怀疑 NVS 写越界或 USB 重枚举时的电源/复位竞态，届时抓 full flash dump 对比。
+
+### 2026-09-28 凌晨续：ESP-SR 复活战（战至天亮，ABI 异常挂账）
+
+用户在等语音唤醒，通宵攻坚。战果与未解全部实录：
+
+- **链接关大捷**：esp-sr 2.5.4 全量链入，NsnetStub 断链手术再立功（拦下 62KB
+  段溢出），静态只 +13.6KB（63.8→77.4KB），闪存 56%。9/25 的"链接吃 20KB"被
+  2.x 瘦身+MORE_PSRAM 配置大幅改善。
+- **KWS 管道全通**：'W' 拉起 → 音频前端上电 → AFE 创建（低成本档、单麦、
+  MORE_PSRAM）→ 喂帧任务跑起来 → **运行中内部 RAM 7.3KB 空闲**（PSRAM 放
+  缓冲的策略完全正确）。mic/VAD/喂帧/任务/TWDT 自保全链路 OK。
+- **⚠️ 未解：esp-sr 2.5.4 组件 ABI 不一致**（新坑，约 40 分钟取证）：
+  现象 = AFE_CONFIG 报 "wakenet model not found"，管道只剩 VAD。
+  取证链：MODEL_LOADER 打 "Successfully load srmodels"（分区内容经回读校验正确，
+  291KB srmodels.bin 手工 movemodel.py 打包 + esptool 烧 0x1EE0000——PIO 不传
+  IDF 的 srmodels_bin 目标，需手动）；但返回的 srmodel_list_t 内容物与头文件
+  布局不符——运行时 sizeof(list)=24（头文件按字段算是 48），48B 十六进制直读：
+  name@0=NULL、num 位=-1。**结论：该版本预编译 lib 与发布头文件的
+  srmodel_list_t 布局漂移（三向不一致），loader 写出的清单 AFE 认不出**。
+  下一步（按性价比）：① espressif/esp-sr GitHub issue 搜同款；② idf_component.yml
+  pin 2.5.3/2.4.x 等版本逐个试（每轮 ~10 分钟）；③ 最坏情况按 bin 格式自述清单
+  按 AFE 实际布局手工填充（有 srmodel_load 源码可作格式规范）。
+- **顺手修复/上线**：model 分区入 partitions.csv（littlefs 让 1MB）；串口 W 开关
+  与设置页 Kws 开关与 kws.setEnabled 三端打通；WiFi 模式下拒绝开 KWS（内存）。
+- 固件当前状态：KWS 默认不开机自启（main 里恢复行仍注释）；开启后一切正常
+  除了听不到唤醒词（模型未挂）。
+
+### 2026-09-28 清晨：0.7.0 语音唤醒落地 + 静音自动收尾（通宵收线）
+
+- **模型加载幽灵破案**（凌晨最大悬疑）：迁移 model 分区到低位 0x812000
+  （factory/ota 瘦身 4M）后一切正常——与 espressif/esp-sr issue #135 完全同款：
+  高地址模型分区会让 esp-sr 的 mmap 加载器读不到真数据（loader 报成功但清单
+  是空的 → AFE "wakenet model not found"）。此前"ABI 漂移"系误诊（被垃圾
+  清单带偏），真凶是分区偏移。换 wn9_jarvis_tts 时踩了 confgen 时机坑：
+  改 defaults 后须确认生成物同步，movemodel 按 sdkconfig 选模型打包。
+- **唤醒词 = "Jarvis"**（_MODEL_INFO_ 实锤单英文词，TTS 合成模型；中文腔
+  "贾维斯"音素对不上，须英文发音）。回退备选：wn9s_nihaoxiaozhi（你好小智）。
+- **唤醒即开录**：命中 → 亮屏+叮咚+便签+recorder.toggle() → 语音助手闭环。
+- **静音自动收尾**（用户"跳动误触录 10 分钟"事故的安全网，双保险）：
+  ① 连续静音 8s 自动收尾（RMS 门限 350 初值，待真机标定；<1s 有效语音→
+  静默丢弃不发）② 单段 3min 硬顶。泵侧逐帧统计（RMS 现成），Recorder 加
+  autoFinish(discard)。
+- **KWS 任务饿死 CPU1 事故**：micRead 失败路径裸 continue 空转 → TWDT 复位
+  循环。修：残段路径 vTaskDelay(10)。教训：泵/轮询循环的任何 continue 前
+  必须有让 CPU 呼吸的延迟。
+- **串口探测复位乌龙**：用户目击"反复重启"实锤为 Python 开端口的 DTR 握手
+  复位（macOS 驱动行为，复位原因=11 可辨）。设备本体全程稳定。
+- 待办：静音 RMS 门限真机标定（日志 [sil] 行带数据）、唤醒/录音抢麦竞态收紧、
+  KWS 常开功耗实测入 power-log、唤醒词阈值灵敏度调校。
+
+## ⏸ 会话暂停锚点（2026-09-28 中午，供上下文压缩后无缝接续——先读本节）
+
+### 设备在跑什么
+- 在机固件 = 0.7.0 **缺两项反馈修复**（构建产物在 .pio 里，烧录时 USB 断连失败）：
+  ① 唤醒即开录时**去掉叮咚+"我在"便签**（用户实锤冗余；开录只留录音自带的"嘎"）
+  ② 静音丢弃（<1s 语音）改为**噗噗+便签"没听到声音"**（原设计静默，用户困惑）
+- **USB 曾整盘消失**（/dev/cu.usbmodem 无、system_profiler 无）——用户可能拔线，
+  也可能设备死机；复插后第一件事：补烧上面两项 + 确认设备健康。
+
+### 用户最新发现/决策（重要）
+- **WiFi 模式下 Jarvis 照样能唤醒并正常录音发送！** 原因：KWS 的 WiFi 拒绝 guard
+  只在 setEnabled 时检查——BLE 里开 KWS → 自动切换到 WiFi 后引擎继续活。
+  实测 WiFi+KWS 运行剩 ~6KB，可用。决策方向：**内存优化后让两模式全功能**，
+  用户已动手优化设置页/其他内存点。
+- 卡片池暂保持 2 张测量版（用户接受），设置页懒构建（~8KB 收益）待做
+  （注意：上次设置页懒构建触发过启动楔死 esp_timer 自旋，根因未查明，重做需专项）。
+- 流式语音（talk M5）内存问题已答复：无需额外库（复用固件内 Opus 解码 +
+  OggDemux，缓冲走 PSRAM），内部 RAM 开销有限，WiFi 模式同链路可用。
+
+### 待破悬案（按优先级）
+1. **红字"未识别到语音内容"但群里已收到**（WiFi 与 BLE 均发生）——疑似服务端
+   对账重发把"上一段的 ASR_FAIL"错配给本段（rec_status_query 幂等重发机制）。
+   取证：复现完整流程抓串行信令流（json 行带时间戳，看 error 与 receipt/reply 时序）。
+2. **唤醒→录音→自动收尾后 1~2 分钟自动重启**——复位原因自报已上线
+   （开机横幅 [boot] 上次复位原因 + TWDT_PANIC 会打印肇事栈）。复现后读串口即知凶。
+3. WiFi+KWS 正式化：移除/放宽 guard（用户实测可行）或改为"提示但允许"。
+4. 打磨老账：RMS 门限标定（[sil] 日志）、TTS 唤醒阈值灵敏度、录音/KWS 抢麦
+   竞态（录音收尾关麦时 KWS 会吃到 -1，seatbelt 3s 自愈中）、KWS 功耗实测入 power-log。
+
+### 关键环境备忘
+- PIO 不触发 esp-sr 的 srmodels_bin 目标：换模型后须手动
+  `python3 managed_components/espressif__esp-sr/model/movemodel.py -d1 sdkconfig.waveshare-s3-amoled-1_75 -d2 managed_components/espressif__esp-sr -d3 .pio/build/waveshare-s3-amoled-1_75`
+  再 esptool 烧到 **0x812000**（model 分区低位地址——高地址会触发 issue #135 幽灵）。
+- 改 sdkconfig.defaults 后必须同步改生成物（confgen 不总是听话，改完 grep 验证）。
+- 串口探测脚本打开端口会复位设备（macOS DTR 握手）——脚本须先设 dtr/rts=False 再 open；
+  用户看到"重启"多数是我探测所致，死因看复位原因=11（USB 复位）可辨。

@@ -188,6 +188,20 @@ simulate_talk.py 模拟设备：talk_request → talk_ready → say 生成的问
 talk 会话期间下行 type=0x01 帧是 **ogg_opus 24kHz 分片**（模型回复音频），
 与上行的 16kHz 裸 Opus 包不同——设备播放侧注意区分（protocol.md §3）。
 
+## 主动 TTS 语音通知（POST /notify）
+
+服务端主动推语音到设备：TTS 合成（百炼 qwen3-tts-flash）→ 下行 `notify`
+信令（带 device/text/id）→ ogg_opus 24kHz 音频帧按 ~2KB 切段、60ms 间隔
+节流下发 → `notify_end` 收尾。设备按 id 配对、按到达顺序拼 Ogg 流播放。
+同刻只容一路通知音频在发（占线 429）。
+
+```bash
+curl -X POST localhost:8000/notify -H 'Content-Type: application/json' \
+     -d '{"device":"gaga-01","text":"该吃药了"}'
+# → {"ok":true,"id":"n_1727...","duration_ms":1234,"audio_bytes":5678}
+# TTS 失败 → 502 {"code":"TTS_FAIL","msg":...}；占线 → 429
+```
+
 ## 生产部署（dokploy）
 
 ```bash
@@ -226,6 +240,8 @@ docker compose up -d   # mosquitto + server 两个服务，whisper 模型挂 vol
 | `DASHSCOPE_API_KEY` | 回落 `~/.bailian/config.json` | 百炼 API Key（bl CLI 登录即有，不进仓库） |
 | `DASHSCOPE_WS_URL` | 从 base_url 推导 | 百炼推理 wss 地址（业务空间专属域名） |
 | `WHISPER_MODEL` | `small` | 模型档位（tiny/base/small/medium），流式失败时的兜底 |
+| `TTS_MODEL` | `qwen3-tts-flash` | 主动通知 TTS 模型（POST /notify）；3.1/3.0-tts-flash 本账号未开通报 url error |
+| `TTS_VOICE` | `Cherry` | 主动通知 TTS 音色（中文女声）；请求可带 voice 字段单条覆盖 |
 | `WHISPER_LANGUAGE` | `zh` | 识别语言 |
 | `VOLC_ASR_ENDPOINT` | sauc bigmodel_nostream | 火山流式 ASR 端点（单向，ADR-033） |
 | `VOLC_ASR_RESOURCE_ID` | `volc.bigasr.sauc.duration` | ASR 1.0 小时版；2.0 需控制台开通后切换 |
@@ -273,6 +289,8 @@ server/
     ├── session.py          # 录音会话装配 + 信令分派 + talk 路由 + 流式/批处理双链路
     ├── pipeline.py         # 解码(ffmpeg) → ASR → 接入端投递 编排
     ├── mqtt_bridge.py      # 订阅 gaga/up、发布 gaga/down（JSON 信令 + 音频帧）
+    ├── tts.py              # 主动 TTS：百炼合成 wav → ffmpeg 转 ogg_opus 24k
+    ├── notify.py           # 主动语音通知：notify → 节流音频帧 → notify_end
     ├── channels/           # 接入端抽象（ADR-030，openclaw 模式）：CHANNEL 选平台
     │   ├── base.py         #   Channel 抽象（send_text 出 / on_message 入）
     │   └── feishu.py       #   飞书：官方 API 发 + 消息轮询收（ADR-029/030）
