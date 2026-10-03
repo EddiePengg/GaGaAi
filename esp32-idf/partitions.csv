@@ -1,12 +1,16 @@
-# 32MB (0x2000000) 分区表 —— 与 Arduino 线（esp32/partitions.csv）保持一致，
-# 两条固件线互换刷写时布局不变
-# 2026-09-28：factory/ota_0 8M→4M（固件 3.6MB 绰绰有余），model 分区上移到低地址
-# 0x812000——issue #135 实锤高分区偏移会触发 esp-sr 加载器 weirdness（not found 幽灵）。
-# Name,   Type, SubType, Offset,  Size,     Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 4M,
-ota_0,    app,  ota_0,   ,        4M,
-otadata,  data, ota,     ,        0x2000,
-model,    data, spiffs,  ,        0x100000,
-littlefs, data, spiffs,  ,        0x16EE000,
+# 32MB (0x2000000) 分区表
+# 布局：nvs 0x6000 / phy_init 0x1000 / factory 4M / ota_0 4M / otadata 0x2000 /
+# model 1M（esp-sr 唤醒模型；低地址偏移 0x812000 治加载器 weirdness，issue #135）/
+# littlefs ~23.6MB 资源区 / coredump 256K（表尾；espcoredump 尸检分区，ADR-079，
+# 2026-10-03。放表尾 = model 地址不动，规避 issue #135 的偏移敏感）。flash 容量
+# 与分区选型属板级体质参数，权威在板 config.json（sdkconfig_append 的
+# PARTITION_TABLE_* 与此文件对应）。
+# Name,   Type, SubType,  Offset,  Size,     Flags
+nvs,      data, nvs,      0x9000,  0x6000,
+phy_init, data, phy,      0xf000,  0x1000,
+factory,  app,  factory,  0x10000, 4M,
+ota_0,    app,  ota_0,    ,        4M,
+otadata,  data, ota,      ,        0x2000,
+model,    data, spiffs,   ,        0x100000,
+littlefs, data, spiffs,   ,        0x16AE000,
+coredump, data, coredump, ,        0x40000,

@@ -1,4 +1,7 @@
 .pio/
 build/
 managed_components/
-sdkconfig.waveshare-s3-amoled-1_75
+sdkconfig.waveshare-*
+# scripts/build.py 的生成产物（sdkconfig.base + 板 config.json 合并而来，勿提交）
+sdkconfig.defaults
+.gaga/

@@ -44,6 +44,29 @@
 app 和 esp32 的目标是"稳定到几乎不需要改"。以后加功能（新工具、新模型、
 多设备）只动 server。
 
+## 固件分层（esp32-idf/）
+
+```
+┌──────────────────────────────────────────────┐
+│ 业务层：state/ protocol/ talk/ notify/ rec/   │
+│          ble/ net/ voice/ debug/ ui/ audio/   │  ← 只认 Board / Imu / Link 抽象
+├──────────────────────────────────────────────┤
+│ 抽象层：boards/common/Board.h（板级能力 +      │  ← xiaozhi 式 board 层
+│          InputActions 输入动作集） motion/Imu.h│    （ADR-076/078）
+├──────────────────────────────────────────────┤
+│ 板子层：boards/<board>/（board_config.h 引脚   │  ← 当前仅 waveshare-s3-amoled-1_75c
+│          唯一权威 + Board 子类 + board_input   │    激活方式/键位分工也是板级决策：
+│          物理键→动作映射 + config.json 变体）   │    换板 = 换映射，业务零改动
+├──────────────────────────────────────────────┤
+│ BSP：微雪官方组件（I2C 总线/显示/触摸初始化）    │
+└──────────────────────────────────────────────┘
+```
+
+选板 = `platformio.ini` 的 `-DGAGA_BOARD_*` 编译宏 →
+`boards/common/board_selected.h` 头文件切换；换板/加板业务层零改动。IMU 已按
+同一先例抽象（`motion/Imu.h`，`net/Link.h` 模式），链路抽象见 `net/Link.h`
+（ADR-039）；外设装配按 `BoardCaps`（touch/imu/pmic/rtc/display/kws）门控。
+
 ## 未来扩展预留
 
 - **在家 WiFi 模式**：设备直连服务器（MQTT 常连 + WebSocket 按需），App 不参与。

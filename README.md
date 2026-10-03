@@ -99,8 +99,8 @@ cd app && ./gradlew assembleDebug   # 需 JDK 25 + Gradle 9.x
 # 手表客户端（嘎嘎的"第二副身躯"，直连 MQTT）
 cd watch && ./gradlew assembleDebug # 产物 gaga-watch-debug.apk
 
-# 设备固件（PlatformIO + ESP-IDF，微雪官方 BSP）
-cd esp32-idf && pio run -t upload
+# 设备固件（PlatformIO + ESP-IDF，board 抽象层支持多板；当前开发板见 docs/hardware.md）
+cd esp32-idf && python3 scripts/build.py build <板名>   # 或 pio run（本地快捷方式）
 ```
 
 密钥全部走环境变量，`.env` 不入库。
@@ -121,11 +121,9 @@ cd esp32-idf && pio run -t upload
 | 文档 | 内容 |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 系统架构与三组件职责 |
-| [docs/protocol.md](docs/protocol.md) | BLE 帧格式 / 信令 / MQTT 主题 |
-| [docs/data-model.md](docs/data-model.md) | 信令 schema 与数据实体 |
-| [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR，只追加不改史） |
+| [docs/protocol.md](docs/protocol.md) | 帧格式 / 信令 schema（按方向）/ 错误码 / MQTT 主题 / 服务端实体 |
+| [.agents/decisions.md](.agents/decisions.md) | 架构决策记录（ADR，AI 维护，只追加不改史） |
 | [docs/hardware.md](docs/hardware.md) | 硬件规格、引脚、实测功耗 |
-| [docs/roadmap.md](docs/roadmap.md) | 里程碑与进度 |
 | [docs/dev-log.md](docs/dev-log.md) | 开发日记（按天） |
 
 ## 🔩 硬件

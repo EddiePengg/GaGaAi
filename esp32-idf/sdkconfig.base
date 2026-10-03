@@ -1,0 +1,225 @@
+# sdkconfig.base —— 跨板公共配置（入 git，手改这里）
+# 拆分自原 sdkconfig.defaults（ADR-077）：板级体质参数（flash 容量/PSRAM/CPU 频率/
+# S3 缓存）迁到 main/boards/<board>/config.json 的 sdkconfig_append；工程根
+# sdkconfig.defaults 是 scripts/build.py 的生成产物（base + 选中板 append 按行合并，
+# 同 key 后者胜，文件头有 GENERATED 注释），勿手改。platformio.ini 的手维护 env
+# 消费的也是这份生成产物。
+# 出处：微雪官方 IDF 示例 02_lvgl_demo_v9 的 sdkconfig.defaults（其 CI 用 IDF v5.5.x 验证），
+#       按本板实情修正 flash 容量 16MB→32MB（esptool 实测，见 docs/hardware.md），
+#       并追加 NimBLE / USB 控制台配置。
+# PlatformIO 构建时以工程根 sdkconfig.defaults 生成 sdkconfig.<env>。
+
+# ---- Flash / 分区 ----
+# ⚠️ 体质参数不在这里：CONFIG_ESPTOOLPY_FLASHMODE_QIO / FLASHFREQ_80M /
+#    FLASHSIZE_32MB / PARTITION_TABLE_CUSTOM(_FILENAME) 随板走，见板 config.json
+#    的 sdkconfig_append（不同板 flash 容量/分区表不同）。
+
+# ---- PSRAM / S3 缓存 ----
+# ⚠️ 体质参数不在这里：CONFIG_SPIRAM=y 及 MODE_OCT/SPEED_80M/FETCH_INSTRUCTIONS/
+#    RODATA/XIP_FROM_PSRAM/USE_MALLOC/MALLOC_ALWAYSINTERNAL/MALLOC_RESERVE_INTERNAL、
+#    CONFIG_ESP32S3_*_CACHE_*、CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP 随板走（有无
+#    PSRAM、叠封容量、缓存布局都是芯片体质），见板 config.json 的 sdkconfig_append。
+#    以下真机策略注释对应的键虽然随板走，知识留在公共层：
+# 内部 RAM 瘦身（真机踩实 2026-09-23：opus 编码器态 ~50KB 把内部堆吃到 ~1KB，
+# LVGL 全屏 flush 的 SPI 反弹缓冲都分配失败）：>16KB 的 malloc 自动落 PSRAM
+# （CONFIG_SPIRAM_USE_MALLOC）。DMA/ISR 类分配走显式 MALLOC_CAP_DMA/INTERNAL，
+# 不受影响。
+# 2026-09-24 下调 16384→256：消息卡 UI 20 卡×3 对象全是小块 malloc，ALWAYSINTERNAL
+# 的"小块内部优先"让它们绕过 SPIRAM_MALLOC_RESERVE_INTERNAL 的 32KB DMA 保留，
+# 把内部堆吃到 6.6KB——SPI 刷屏反弹缓冲（466×10×2≈9.3KB，MALLOC_CAP_DMA）分不出来，
+# 真机报满屏 "Draw bitmap failed: ESP_ERR_NO_MEM"。现在小块也落 PSRAM，内部留给 DMA。
+# 2026-09-27 内存专项 256→64：LVGL 上百个小对象（65~256B 档）全部去 PSRAM，
+# 内部只留 64B 以下的极小分配。预期再省 5~10KB 内部 RAM；若 UI 手感变卡，一行改回
+#（在板 config.json 的 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL 上改）。
+
+# ---- CPU / RTOS ----
+# ⚠️ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240 随板走（芯片体质），见板 config.json。
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# ---- 控制台走原生 USB（Type-C，macOS 识别为 /dev/cu.usbmodem*）----
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ---- 蓝牙：NimBLE host（IDF 内置 bt 组件；沿用 ADR-011 的 NimBLE 选型）----
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# ---- 蓝牙控制器裁剪（2026-09-27 内存专项，ADR-039 互斥的前提）----
+# 设备只是"被手机连"的纯外设：CENTRAL（主动连别人）/OBSERVER（扫描）/扩展扫描/
+# 周期同步全部不用，控制器按上限预分配的内存全省。MAX_ACT 6→3（广播+2 条连接：
+# 手机+笔记本同连可活）；MAX_CONNECTIONS 3→2。
+# ⚠️ 软件共存（coex）必须关（ESP_COEX_SW_COEXIST_ENABLE，见下方 WiFi 段）——不关会
+# 在 BT 控制器 emi.c:164 断言死循环（2026-09-27 实锤，与 PHY 开关无关）。
+# CONFIG_BT_NIMBLE_ROLE_CENTRAL is not set
+# CONFIG_BT_NIMBLE_ROLE_OBSERVER is not set
+# CONFIG_BT_NIMBLE_EXT_SCAN is not set
+# CONFIG_BT_NIMBLE_ENABLE_PERIODIC_SYNC is not set
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+CONFIG_BT_CTRL_BLE_MAX_ACT=3
+
+# ---- LVGL 9（BSP 经 esp_lvgl_adapter 拉起；裁剪自官方 demo 的 LVGL 配置块）----
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_DEF_REFR_PERIOD=15
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+# 中文走自生子集字体（assets/fonts/，OFL 思源黑体）；ESP 内置 SourceHanSans 子集不含
+# "录/连"等字（豆腐块实锤）不再启用，省 ~1.2MB flash
+# 屏幕像素快照自证渲染（串口 'p'）：LVGL 离线渲染当前屏 → 统计/ASCII 画
+CONFIG_LV_USE_SNAPSHOT=y
+CONFIG_LV_TXT_BREAK_CHARS=" ,.;:-_"
+
+# NOTE: BSP 的 CONFIG_BSP_ERROR_CHECK 保持默认 y（=n 时代码路径有类型错误编译不过，
+# BSP 作者只测过默认值；音频/显示初始化失败会以 assert 形式暴露，bring-up 期反而更好排查）
+
+# ---- esp-sr 语音唤醒（ADR-032）----
+# CONFIG_SR_WN_WN9_HILEXIN is not set   # 2026-09-28：2.5.4 下 hilexin 打包疑似损坏（issue #142 同款），换 wn9s_nihaoxiaozhi
+# CONFIG_SR_WN_WN9_NIHAOXIAOZHI is not set   # ⚠️ 实测弃用（2026-09-28 晚）：setEnabled 挂死→卡死重启，与 hilexin 同疑案（s 版打包损坏）；_tts 系正常
+# 唤醒词"你好小智"TTS 版（2026-09-28 晚：Jarvis 中文触发率低弃用；tts 系打包验证可用，识别率与省电的折中）
+# ⚠️ sdkconfig 语法：CONFIG 赋值行不许带行尾注释（kconfiglib 会把 "#..." 当值的一部分，
+#    INT 解析失败整行丢弃且只给警告）——注释一律写在本行上方。
+CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y
+# CONFIG_SR_WN_WN9_JARVIS_TTS is not set   # 原"Jarvis"（用户发音不标准触发率低，弃用备档）
+
+# 内存体检（'h' 命令）：任务栈水位需要遍历任务表（2026-09-25 内存事故后的观测能力）
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# TWDT 触发即 panic（打印肇事任务名+backtrace 后复位）—— freeze 取证刚需：
+# 只复位不打印 = 每次 freeze 都不知道谁 wedge（2026-09-28 实教训）
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# NimBLE 内存走 PSRAM 外挂（2026-09-25：片上被 BLE 吃掉几十 KB 是刷屏 NO_MEM
+# 与滚动卡顿的共同根源；NimBLE 官方支持 external 分配，吞吐无损）
+# ⚠️ 依赖板子有 PSRAM——无 PSRAM 的新板必须在 config.json 的 sdkconfig_append
+# 里用同 key 覆盖回默认（合并规则：同 key 后者胜）。
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+
+# ---- WiFi 直连 MQTT 的内存瘦身（家模式，ADR-039 B 期）----
+# 单 binary 里 WiFi/lwIP/mqtt 的静态 BSS 必然链接进来，能省则省：
+# ⚠️ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP 随板走（PSRAM 体质），见板 config.json。
+CONFIG_LWIP_MAX_SOCKETS=3
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=12
+# RX_BA_WIN 必须 ≤ 2×STATIC_RX_BUFFER_NUM（wifi_init.c 编译期硬检查）；
+# 瘦内存把静态 RX 砍到 4 后默认 16 超标。MQTT 信令不需要块确认聚合，6 足够。
+CONFIG_ESP_WIFI_RX_BA_WIN=6
+# 第二轮瘦身（2026-09-27 家模式实测 esp_wifi_init NO_MEM 后）：
+# 设备只跑 MQTT 信令（小包低频），以下默认大户全部砍掉——
+# CACHE_TX_BUFFER 32→4（TCP 发送缓存，默认 32 份是吞吐取向）
+# AMPDU TX/RX 关（聚合传输，信令场景零收益，还带走 BA 重排缓冲）
+# SOFTAP 关（只用 STA；softAP 结构体全省）
+# 静态 RX 6→4、动态 RX 16→8、动态 TX 12→8（各 ~1.6KB/份，内部 RAM）
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=4
+# 漏网之鱼（2026-09-27 DEBUG 日志实锤）：STATIC_TX_BUFFER_NUM 默认 16
+# （16×1600B≈26KB），是 wifi init 最大单项，先吃饱导致 static RX 分不出 →
+# init 整体 ESP_ERR_NO_MEM。砍到 4（MQTT 信令绰绰有余）。
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=4
+# CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
+# CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
+# CONFIG_ESP_WIFI_SOFTAP_SUPPORT is not set
+# ⚠️ 软件共存关 + WiFi IRAM 三个加速关——这两个是 BT 控制器 emi.c:164 断言
+# （crash loop）的根治组合（2026-09-27 三轮二分实锤）：
+# ① WiFi 链入后 IRAM_OPT 默认开，WiFi 代码驻 IRAM 吃掉 ~26KB 本可作堆的 SRAM，
+#    堆起点从 163KB 跌到 120KB；蓝牙控制器初始化申请内存池（断言 param 0x7800/
+#    0x8c00 = 30/35KB 整数 KiB 实锤）分不到 → 断言重启。
+# ② 共存本设计用不上（互斥运行），关掉无害还省内存；但单关不够，IRAM 才是大头。
+# WiFi 代码走 Flash 执行：MQTT 信令延迟无感，吞吐换内存。
+# CONFIG_ESP_COEX_SW_COEXIST_ENABLE is not set
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_SLP_IRAM_OPT is not set
+# CONFIG_LWIP_IPV6 is not set
+# CONFIG_ESP_WIFI_NVS_ENABLED is not set
+# 第三轮瘦身（2026-09-28 晚，WiFi 22→30KB 战役之②；基线 21299B 同口径实测）：
+# 窄带画像（49B 信令 + 2KB/s 音频 + TTS 下行突发）下，lwIP 的 MEMP 池按
+# MAX_* 份数预分配，默认 16 份是白付的房租——这份才是稳态省内存的大头；
+# TCP SND/WND 不预分配但封顶排队深度，窄带永远塞不满，砍小防突发吃光：
+#（行尾注释曾直接写在赋值行后被 kconfiglib 当值解析丢弃——2026-10-03 等价性 diff 实锤，已上移）
+# 16→5（SOCKETS=3 余一倍；每 PCB ~200B 池内常驻）
+CONFIG_LWIP_MAX_ACTIVE_TCP=5
+# 16→2（设备从不 listen）
+CONFIG_LWIP_MAX_LISTENING_TCP=2
+# 16→4（DNS 一份够）
+CONFIG_LWIP_MAX_UDP_PCBS=4
+# 5760→2048
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=2048
+# 5760→2048（2KB≈1s 音频；RTT 30ms 下仍 ~40KB/s）
+CONFIG_LWIP_TCP_WND_DEFAULT=2048
+# 8→6（~1.6KB/份，低流量同时占用少）
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
+# WPA3 关（家路由 WPA2；SAE/OWE 只在握手期占堆，砍掉去握手峰值）：
+# CONFIG_ESP_WIFI_ENABLE_WPA3_SAE is not set
+# CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA is not set
+# 第四轮（2026-09-28 压测日续）：静态 RX 4→3（~1.6KB/份稳态房租；窄带低流量
+# 下 3 份足够吸收突发）。约束检查：RX_BA_WIN 必须 ≤ 2×STATIC_RX——BA 窗口
+# 同步 6→4，两头都过编译期硬检查。若实测出现 RX 丢包（TCP 大量重传）回退。
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
+CONFIG_ESP_WIFI_RX_BA_WIN=4
+# ⚠️ "is not set" 行必须带行首 "# "（kconfiglib 硬格式；缺 # 会被当畸形行丢弃——
+# 2026-10-03 等价性 diff 实锤，曾丢 "#" 导致该选项静默回默认 =y）
+# CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_CODED_PHY is not set
+
+# ⚰️ 侦探模式（2026-09-28 深夜）已整段拆除：COMPREHENSIVE+TASK_TRACKING 导致
+# 开机循环 LoadProhibited（217 崩 8 成活，栈：core1 调度器启动→esp_intr_alloc
+# →heap_caps_malloc→heap_task_info 互斥锁 give→xTaskRemoveFromEventList）。
+# TASK_TRACKING 是 IDF 5.5 半成品（官方 issue #17232 / IDFGH-16182 同族）。
+# 越界写悬案未结，移交后续排查；若再上侦探配置，只考虑 COMPREHENSIVE 单项。
+# ⚰️ HEAP_TRACING_STANDALONE（2026-09-29 凌晨整批撤除）：实测每次堆操作关中断
+# 抓回溯，LVGL 建页数百次 traced malloc 把中断关数秒 → TWDT 重启循环。
+# 任务栈按水位裁衣（2026-09-29，水位='h' 实测剩余）：esp_timer 3584→2560（只用 440）。
+# ⚠️ swdraw 8192→4096 已回滚（金丝雀实锤：画师重渲染峰值超 4096 → 溢出踩进
+# lvgl 栈底被误报为"lvgl 溢出"；lvgl 6144 同理回滚 8192。教训：水位必须在
+# 重渲染负载下测，空闲时刻的 'h' 永远测不到峰值）。
+CONFIG_LV_DRAW_THREAD_STACK_SIZE=8192
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=3584
+# sys_evt 恢复 2304（2026-09-29 回归实锤候选）：裁到 1792 后"录音即崩"——录音
+# 引爆 WiFi/MQTT 事件洪峰，事件全走 sys_evt，其负载水位从未实测过。先恢复
+# 定罪/脱罪，事后再在负载下测峰值决定是否重裁。
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=2304
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=2048
+# DMA 预留池 32K→16K（2026-09-28 深夜）：取证实锤该池=34816B 鲸鱼本体，IDF
+# 默认全量预留。窄带用途（LCD 反弹 1.86KB + I2S DMA）16K 十倍余量；内部堆
+# 直接 +16K——WiFi+KWS 的缺口就靠它。
+# ⚠️ 2026-09-29 午后续：上面"回退 32768"的护栏被误触发过——值写错成 32768
+# 整整一天，内部堆被偷 16K（wifi init 前 71911→44639 实锤），刷屏 DMA 分配
+# 失败花屏。已按原意恢复 16384；buffer_height 同步 16→8（flush 块 14.9KB→
+# 7.4KB，I2S+flush 在 16K 池内仍装得下：7.4K+I2S≈6K≈13.4K<16K）。
+# ⚠️ 该键（CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL）随板走，见板 config.json。
+# 🔍 侦探配置（2026-09-29 幽灵捕兽夹 II）已结项回滚：监视点+毒化双开时
+# 旧构建 4/4 必崩的录音→ASR_FAIL 路径连续 4 轮全活（布局/时序敏感实锤），
+# 但监视点单项常驻白吃 ~20KB 内部堆（刷屏 DMA 分配失败→花屏，用户实锤），
+# 毒化单项拖慢堆操作——两者均为排障临时配置，不常驻。真修 = 泵栈 49152 +
+# lvgl 栈 12288 + 串口渲染投 LVGL + AppState 竞态锁 + displaySleep 锁。
+# 尸检现场已上（2026-10-03）：espcoredump 落盘已常驻，见文件尾 coredump 段（ADR-079）。
+# WiFi 任务栈 3072→4096（'h' 实测只剩 432B，加 1K 保险，防 WiFi 事件洪峰
+# 打穿踩内部堆——录音引爆 WiFi/MQTT 洪峰是今天的固定剧情）。
+CONFIG_ESP_WIFI_TASK_STACK_SIZE=4096
+# ⚰️ HEAP_TASK_TRACKING（2026-09-29 深夜二验）：单项启用仍开机循环
+# （core1 main_task → LoadProhibited，与 09-28 事故同症，IDF 5.5 半成品坐实，
+# 官方 issue #17232 / IDFGH-16182 同族）。放弃 per-task 归因，改用 'D' 堆块
+# 快照差分（零配置）+ 分配点代码审计。若未来 IDF 修复可再试。
+
+# ---- BLE modem sleep（2026-09-29 功耗专项，.agents/power.md 优化#1）----
+# 连接态两次 30ms 连接事件之间射频全程醒着，是息屏待机 25-40mA 的头号嫌疑；
+# 打开后控制器在事件间隙睡觉（预期省 5~15mA）。烧后回归：BLE 连接稳定 /
+# talk 下行 / 断连重连，同口径复测掉电。
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+
+# ---- espcoredump 尸检落盘（2026-10-03，ADR-079）----
+# panic / 断言 / TWDT 暴毙时，IDF 在复位前把 CPU 寄存器 + 全部任务栈打包写
+# flash 的 coredump 分区（分区表尾，各板分区表统一带 256K）。下次连机用
+# espcoredump.py 读回解码（必须配套当次构建的 firmware.elf 才能翻译成代码行）。
+# 深睡/软复位不触发；只留最近一具尸体，再崩覆盖。
+# 动机（2026-10-03 实锤）：白天正常使用 ~2h 周期性 panic 重启（复位原因 4，
+# 临终前心跳/堆/BLE 全部正常、毫无预警），panic 回溯走 USB 控制台，重枚举即丢
+# ——不落盘就永远拿不到死亡瞬间现场。芯片级功能，跨板通用，故进 base 而非板 config。
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64

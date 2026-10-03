@@ -5,7 +5,7 @@
 默认源：docs/assets/icons/gaga-icon.png（换 duck-pendant-v3-1024.png 时
 放回 docs/assets/ 后传参重跑即可）。
 
-输出：esp32-idf/src/ui/assets/img_duck.h/.c（符号名 img_duck 不变）。
+输出：esp32-idf/main/ui/assets/img_duck.h/.c（符号名 img_duck 不变）。
 ⚠️ 字节序：LVGL9 ARGB8888 = 每像素内存序 B,G,R,A（小端 0xAARRGGBB）。
 2026-09-25 事故复盘：上一版数据是 RGB565(2B/px) 但头声明 ARGB8888
 （stride 932≠1864），LVGL 按 4B 读 → 两幅错位绿图。
@@ -16,8 +16,8 @@ from PIL import Image, ImageDraw
 
 SIZE = 466
 SRC = sys.argv[1] if len(sys.argv) > 1 else "docs/assets/icons/gaga-icon.png"
-OUT_C = "esp32-idf/src/ui/assets/img_duck.c"
-OUT_H = "esp32-idf/src/ui/assets/img_duck.h"
+OUT_C = "esp32-idf/main/ui/assets/img_duck.c"
+OUT_H = "esp32-idf/main/ui/assets/img_duck.h"
 
 im = Image.open(SRC).convert("RGBA")
 w, h = im.size

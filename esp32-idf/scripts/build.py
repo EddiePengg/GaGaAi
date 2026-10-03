@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""gaga 固件多板构建脚本（PIO 版 xiaozhi-esp32 scripts/build.py，ADR-077）。
+
+是什么：扫描 main/boards/<board>/config.json 声明的构建变体，把跨板公共的
+sdkconfig.base 与变体的 sdkconfig_append 按行合并（同 key 后者胜）写工程根
+sdkconfig.defaults（PIO 硬编码消费它），生成 .gaga/build-<变体>.ini 临时配置
+（extra_configs 引主 platformio.ini），驱动 pio run 构建/刷机。设计参考
+xiaozhi-esp32 的 scripts/build.py（config.json 变体 + 行级合并），差异：gaga
+工具链在 PlatformIO，本脚本驱动 pio run 而不是 idf.py。
+
+用法示例：
+    python3 scripts/build.py list
+        # 列出所有板/变体（板目录名 / target / 变体名 表格）
+    python3 scripts/build.py build waveshare-s3-amoled-1_75c
+        # 构建指定板（默认其全部变体；--name <变体> 只构建一个）
+    python3 scripts/build.py build --all
+        # 串行构建全部板的全部变体
+    python3 scripts/build.py build waveshare-s3-amoled-1_75c --upload --port /dev/cu.usbmodem101
+        # 构建并刷机（pio run -t upload --upload-port <port>）
+    python3 scripts/build.py build <板> --dry-run
+        # 只合并 sdkconfig + 生成临时 ini，不调用 pio（验证配置用）
+    python3 scripts/build.py matrix          # 或 --matrix
+        # 吐 GitHub Actions 构建矩阵 JSON（[{"board","name","target"}]，将来 CI 用）
+
+板级参数（选板宏 / pio board / flash 容量 / 分区表 / sdkconfig 体质参数）的权威在
+main/boards/<board>/config.json；platformio.ini 里的 dev env 只是它的手维护镜像。
+"""
+
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+# 工程根 = 本脚本所在 scripts/ 的上一级（esp32-idf/）
+ROOT = Path(__file__).resolve().parent.parent
+BOARDS_DIR = ROOT / "main" / "boards"
+BASE_CONFIG = ROOT / "sdkconfig.base"
+GENERATED_DEFAULTS = ROOT / "sdkconfig.defaults"
+WORK_DIR = ROOT / ".gaga"
+
+# config.json 构建变体的必填字段（缺了直接报错，不猜）
+REQUIRED_BUILD_FIELDS = (
+    "name", "board_flag", "pio_board", "flash_size", "app_max_size", "partitions",
+)
+
+
+class BuildError(Exception):
+    """带中文消息的构建配置错误（主函数捕获后打印并退出非零）"""
+
+
+def load_boards():
+    """扫描 main/boards/*/config.json → {板名: 配置 dict}。格式错/缺字段报中文错。"""
+    if not BOARDS_DIR.is_dir():
+        raise BuildError(f"找不到板目录 {BOARDS_DIR}")
+    boards = {}
+    for cfg_path in sorted(BOARDS_DIR.glob("*/config.json")):
+        board_name = cfg_path.parent.name
+        try:
+            data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise BuildError(f"{cfg_path}：JSON 格式错误——{e}") from e
+        if not isinstance(data, dict) or not isinstance(data.get("builds"), list):
+            raise BuildError(f"{cfg_path}：缺少 builds 数组")
+        for field in ("board", "target"):
+            if not data.get(field):
+                raise BuildError(f"{cfg_path}：缺少必填字段 {field!r}")
+        if data["board"] != board_name:
+            raise BuildError(
+                f"{cfg_path}：board 字段 {data['board']!r} 与目录名 {board_name!r} 不一致")
+        for build in data["builds"]:
+            for field in REQUIRED_BUILD_FIELDS:
+                if field not in build:
+                    raise BuildError(f"{cfg_path}：变体缺少必填字段 {field!r}")
+            build.setdefault("sdkconfig_append", [])
+        boards[board_name] = data
+    if not boards:
+        raise BuildError(f"{BOARDS_DIR} 下没有任何 config.json")
+    return boards
+
+
+def sdkconfig_key(line):
+    """取一行的 CONFIG key；注释/空行返回 None。
+
+    支持两种形态：`CONFIG_XXX=y` / `CONFIG_XXX=值` / `# CONFIG_XXX is not set`。
+    """
+    s = line.strip()
+    if not s or s.startswith("#") and not s.startswith("# CONFIG_"):
+        return None
+    if s.startswith("# CONFIG_") and s.endswith(" is not set"):
+        return s[2:-len(" is not set")].strip()
+    if s.startswith("CONFIG_") and "=" in s:
+        return s.split("=", 1)[0].strip()
+    return None
+
+
+def merge_sdkconfig(base_text, append_lines):
+    """字符串行级合并（xiaozhi build.py 同款机制）：base 在前、append 在后，
+    同 key 后者胜（旧行作废），注释与空行原样保序通过。"""
+    out = []          # 输出行；None = 被后者覆盖作废的行
+    pos = {}          # CONFIG key → 在 out 里的下标
+    bad_inline = []   # 带行尾注释的赋值行（kconfiglib 会当值解析后丢弃——语法陷阱）
+    for line in list(base_text.splitlines()) + list(append_lines):
+        key = sdkconfig_key(line)
+        if key is None:
+            out.append(line)
+            continue
+        value = line.split("=", 1)[1] if "=" in line else ""
+        if "#" in value:
+            bad_inline.append(line)
+        if key in pos:
+            out[pos[key]] = None
+        pos[key] = len(out)
+        out.append(line)
+    if bad_inline:
+        print("⚠️ 警告：以下赋值行行尾带了 # 注释，kconfiglib 会把它当值的一部分导致"
+              " INT 解析失败、整行静默丢弃——请把注释移到该行上方：")
+        for line in bad_inline:
+            print(f"    {line.strip()}")
+    return "\n".join(l for l in out if l is not None) + "\n"
+
+
+def write_defaults(board, build):
+    """sdkconfig.base + 变体 sdkconfig_append → 工程根 sdkconfig.defaults（生成产物）。"""
+    if not BASE_CONFIG.is_file():
+        raise BuildError(f"找不到 {BASE_CONFIG}（跨板公共 sdkconfig）")
+    merged = merge_sdkconfig(BASE_CONFIG.read_text(encoding="utf-8"),
+                             build["sdkconfig_append"])
+    header = (
+        "# ============================================================\n"
+        "# GENERATED by scripts/build.py —— 勿手改！\n"
+        f"# 来源：sdkconfig.base + main/boards/{board}/config.json"
+        f"（变体 {build['name']}）的 sdkconfig_append 按行合并（同 key 后者胜）。\n"
+        "# 改配置：公共项改 sdkconfig.base，板级体质参数改板 config.json。\n"
+        "# ============================================================\n"
+    )
+    GENERATED_DEFAULTS.write_text(header + merged, encoding="utf-8")
+    print(f"[sdkconfig] 已生成 {GENERATED_DEFAULTS.name}"
+          f"（base + {build['name']} 的 append）")
+    force_regen_if_changed(build)
+
+
+def force_regen_if_changed(build):
+    """kconfgen 的 defaults 只给"未设置的符号"补缺：sdkconfig.<env> 已存在时，
+    改 defaults 不会刷新旧值（PIO 的 mtime 重配也不会）。所以按生成物内容 hash
+    记账：defaults 变了就删掉 sdkconfig.<env>，强制下轮按新 defaults 全量重配。"""
+    sdkconfig = ROOT / f"sdkconfig.{build['name']}"
+    stamp = WORK_DIR / f"defaults-hash-{build['name']}.txt"
+    current = hashlib.sha256(GENERATED_DEFAULTS.read_bytes()).hexdigest()
+    previous = stamp.read_text(encoding="utf-8").strip() if stamp.exists() else None
+    if previous != current and sdkconfig.exists():
+        sdkconfig.unlink()
+        print(f"[sdkconfig] defaults 内容变化，已删 {sdkconfig.name} 强制重配")
+    stamp.write_text(current + "\n", encoding="utf-8")
+
+
+def write_variant_ini(build):
+    """生成 .gaga/build-<变体>.ini：从 config.json 生成自包含 [env:<变体>]，
+    并经 extra_configs 引主 platformio.ini（绝对路径；公共 tweaks 单点维护）。
+    src_dir 显式写 main——extra_configs 万一没被合并，临时 ini 也能独立成构。"""
+    WORK_DIR.mkdir(exist_ok=True)
+    ini_path = WORK_DIR / f"build-{build['name']}.ini"
+    ini_path.write_text(
+        "[platformio]\n"
+        "src_dir = main\n"
+        f"extra_configs = {ROOT / 'platformio.ini'}\n"
+        "\n"
+        f"[env:{build['name']}]\n"
+        "platform = espressif32@^6.13.0\n"
+        f"board = {build['pio_board']}\n"
+        "framework = espidf\n"
+        "\n"
+        "monitor_speed = 115200\n"
+        "upload_speed = 921600\n"
+        "\n"
+        f"build_flags = -D{build['board_flag']}\n"
+        f"board_upload.flash_size = {build['flash_size']}\n"
+        f"board_upload.maximum_size = {build['app_max_size']}\n"
+        f"board_build.partitions = {build['partitions']}\n",
+        encoding="utf-8")
+    print(f"[ini] 已生成 {ini_path.relative_to(ROOT)}（env: {build['name']}）")
+    return ini_path
+
+
+def run_pio(ini_path, build, upload, port):
+    """pio run -c 临时ini -e 变体（构建/刷机共用；project dir 钉在工程根，.pio 不落 .gaga/）。"""
+    cmd = ["pio", "run", "-c", str(ini_path), "-d", str(ROOT), "-e", build["name"]]
+    if upload:
+        cmd += ["-t", "upload"]
+        if port:
+            cmd += ["--upload-port", port]
+    print(f"[pio] {' '.join(cmd)}")
+    rc = subprocess.call(cmd, cwd=ROOT)
+    if rc != 0:
+        raise BuildError(f"pio run 失败（退出码 {rc}），变体 {build['name']}")
+    firmware = ROOT / ".pio" / "build" / build["name"] / "firmware.bin"
+    if firmware.is_file():
+        size_mb = firmware.stat().st_size / 1024 / 1024
+        print(f"[done] {firmware.relative_to(ROOT)}  ({size_mb:.2f} MiB)")
+
+
+def cmd_list(boards):
+    """list：板名 / target / 变体表格。"""
+    print(f"{'板子':<34} {'target':<10} 变体")
+    print("-" * 70)
+    for name, data in boards.items():
+        for build in data["builds"]:
+            print(f"{name:<34} {data['target']:<10} {build['name']}")
+
+
+def cmd_matrix(boards):
+    """matrix：GitHub Actions 构建矩阵 JSON（将来 CI 用）。"""
+    matrix = [
+        {"board": name, "name": build["name"], "target": data["target"]}
+        for name, data in boards.items()
+        for build in data["builds"]
+    ]
+    print(json.dumps(matrix, ensure_ascii=False, indent=2))
+
+
+def cmd_build(boards, args):
+    """build <board> / --all [--name 变体] [--dry-run] [--upload --port]。"""
+    if args.all:
+        todo = [(name, b) for name, data in boards.items() for b in data["builds"]]
+    else:
+        if args.board not in boards:
+            raise BuildError(
+                f"找不到板子 {args.board!r}，在册：{', '.join(boards)}")
+        todo = [(args.board, b) for b in boards[args.board]["builds"]]
+    if args.name:
+        todo = [(n, b) for n, b in todo if b["name"] == args.name]
+        if not todo:
+            raise BuildError(f"找不到变体 {args.name!r}")
+    for board, build in todo:
+        print(f"\n=== 构建 {board} / 变体 {build['name']} ===")
+        write_defaults(board, build)
+        ini_path = write_variant_ini(build)
+        if args.dry_run:
+            print("[dry-run] 只生成 sdkconfig.defaults + 临时 ini，不调用 pio")
+            continue
+        run_pio(ini_path, build, args.upload, args.port)
+
+
+def main(argv=None):
+    # 兼容 `build.py --matrix` 的 flag 写法（xiaozhi 同款），在 argparse 之前拦截
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "--matrix":
+        try:
+            cmd_matrix(load_boards())
+        except BuildError as e:
+            print(f"错误：{e}", file=sys.stderr)
+            return 1
+        return 0
+
+    parser = argparse.ArgumentParser(
+        description="gaga 固件多板构建（PIO 版，参考 xiaozhi build.py，ADR-077）。"
+                    "板级参数权威在 main/boards/<board>/config.json。",
+        epilog="""用法示例：
+  python3 scripts/build.py list
+  python3 scripts/build.py build waveshare-s3-amoled-1_75c
+  python3 scripts/build.py build waveshare-s3-amoled-1_75c --name <变体>
+  python3 scripts/build.py build --all
+  python3 scripts/build.py build waveshare-s3-amoled-1_75c --upload --port /dev/cu.usbmodem101
+  python3 scripts/build.py build <板> --dry-run
+  python3 scripts/build.py matrix            # 或 --matrix：GitHub Actions 矩阵 JSON""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True,
+                                metavar="{list,matrix,build}")
+    sub.add_parser("list", help="列出所有板/变体（板目录名 / target / 变体名）")
+    sub.add_parser("matrix", help="吐 GitHub Actions 构建矩阵 JSON")
+    p_build = sub.add_parser("build", help="构建指定板（默认其全部变体）")
+    p_build.add_argument("board", nargs="?",
+                         help="板目录名（main/boards/<board>/）；--all 时省略")
+    p_build.add_argument("--all", action="store_true", help="串行构建全部板的全部变体")
+    p_build.add_argument("--name", help="只构建该板下指定变体")
+    p_build.add_argument("--dry-run", action="store_true",
+                         help="只合并 sdkconfig + 生成临时 ini，不调用 pio（验证配置）")
+    p_build.add_argument("--upload", action="store_true", help="构建后刷机（pio -t upload）")
+    p_build.add_argument("--port", help="刷机端口（如 /dev/cu.usbmodem101）")
+    args = parser.parse_args(argv)
+    try:
+        boards = load_boards()
+        if args.command == "list":
+            cmd_list(boards)
+        elif args.command == "matrix":
+            cmd_matrix(boards)
+        elif args.command == "build":
+            if not args.all and not args.board:
+                raise BuildError("build 需要板名（或 --all）")
+            cmd_build(boards, args)
+    except BuildError as e:
+        print(f"错误：{e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
